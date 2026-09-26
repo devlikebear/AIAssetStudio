@@ -1,0 +1,12 @@
+.venv/
+data/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+web/node_modules/
+web/dist/
+*.log
+# Claude Code settings for one PC (its launch.json holds that PC's paths)
+.claude/launch.json
+.claude/settings.local.json

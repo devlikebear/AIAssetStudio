@@ -1,0 +1,48 @@
+[project]
+name = "aiassetstudio"
+version = "0.1.0"
+description = "Local game asset studio (sprites, icons, BGM) on top of ComfyUI"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "librosa>=0.11",
+    "mcp>=2.2",
+    "numpy>=2.5.3",
+    "pillow>=12.3.0",
+    "pydantic>=2.13.5",
+    "scipy>=1.18.1",
+    "soundfile>=0.14",
+    "uvicorn[standard]>=0.53.0",
+]
+
+[project.scripts]
+aiassetstudio = "aiassetstudio.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.8",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = ["gpu: 실제 ComfyUI와 GPU가 필요한 테스트"]
+addopts = "-m 'not gpu'"
+testpaths = ["tests"]
+# Starlette 1.7's TestClient prefers the separate `httpx2` package but still supports httpx, which the app uses.
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient` is deprecated"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+# spikes: verified one-off measurement scripts kept as reference. docs: ruff would also format code blocks in the plans.
+extend-exclude = ["spikes", "docs"]

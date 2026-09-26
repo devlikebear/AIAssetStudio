@@ -1,0 +1,115 @@
+/* Darkroom contact sheet: warm near-black, paper-white type, chinagraph yellow and red for marks. */
+:root {
+  color-scheme: dark;
+  --bg: #121110;
+  --bg-raise: #181614;
+  --surface: #1e1b18;
+  --surface-2: #27231f;
+  --line: #37322c;
+  --line-soft: #2a2622;
+  --text: #ece5d8;
+  --muted: #a39a8c; /* ~6.5:1 on --bg */
+  --faint: #857c70; /* ~4.4:1 on --bg: small metadata stays readable */
+  --amber: #f3b63f; /* chinagraph yellow: selections, focus, primary actions */
+  --amber-dim: rgb(243 182 63 / 0.14);
+  --amber-ink: #1c1406;
+  --red: #ff5d4a; /* chinagraph red: rejections, errors */
+  --red-dim: rgb(255 93 74 / 0.14);
+  --ok: #a3c98f;
+  --check-a: #2d2a27;
+  --check-b: #36322e;
+  --check-size: 14px;
+  --radius: 3px;
+  --font-sans: 'IBM Plex Sans KR', sans-serif;
+  --font-mono: 'IBM Plex Mono', 'IBM Plex Sans KR', monospace;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+[data-checker='light'] {
+  --check-a: #d9d6d0;
+  --check-b: #f3f1ec;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+body {
+  min-height: 100vh;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* film grain + safelight vignette over everything; never catches clicks */
+body::before,
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 100;
+}
+
+body::before {
+  opacity: 0.07;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  mix-blend-mode: overlay;
+}
+
+body::after {
+  background: radial-gradient(ellipse at 50% 0%, rgb(243 182 63 / 0.05), transparent 55%),
+    radial-gradient(ellipse at 50% 120%, rgb(0 0 0 / 0.55), transparent 60%);
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+}
+
+.mono,
+code,
+pre {
+  font-family: var(--font-mono);
+}
+
+::selection {
+  background: var(--amber);
+  color: var(--amber-ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
