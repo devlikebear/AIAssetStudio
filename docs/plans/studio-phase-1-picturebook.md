@@ -13,8 +13,8 @@ _예상 소요: 약 30시간_
 ## 전제 조건
 
 - [x] 시험 제작 완료([기록](./notes/studio-spike-2026-11-01.md))
-- [ ] 시험 스크립트 원본이 `<MyPCWorks>\storybook-lastwater\`에 있다(T1.A.1에서 옮긴다)
-- [ ] `aiassetstudio check`에서 `qwen` 계열이 준비됨
+- [x] 시험 스크립트 원본이 `<MyPCWorks>\storybook-lastwater\`에 있다(T1.A.1에서 옮긴다)
+- [x] `aiassetstudio check`에서 `qwen` 계열이 준비됨
 
 ## 포함 기능
 
@@ -36,12 +36,12 @@ _예상 소요: 약 30시간_
 
 ### 작업 그룹 A: 시험 코드와 장소 참조 결정
 
-- [ ] **T1.A.1** — 시험 스크립트 보관
+- [x] **T1.A.1** — 시험 스크립트 보관
   - 파일: `spikes/studio/render_pages.py`, `render_video.py`, `layout_book.py`, `assemble_video.py`, `gen_tts.py`
   - 내용: 스크립트를 복사하고 개인 경로를 `<...>` 표기나 인자로 바꾼다. `storyboard.json`과 작품 본문은 복사하지 않는다.
   - 검증: `git grep`으로 작품 고유명사, 줄거리 단서, `C:\Users\`가 `spikes/studio/`와 `docs/plans/`의 Studio 문서에 없음
 
-- [ ] **T1.A.2** — 장소 시트를 세 번째 참조로 넣는 시험 (GPU, 수동)
+- [x] **T1.A.2** — 장소 시트를 세 번째 참조로 넣는 시험 (GPU, 수동)
   - 파일: `spikes/studio/three_refs.py`, `docs/plans/notes/studio-three-refs.md`
   - 내용: 인물 2명 + 장소 그림 1장을 `images.image_1~3`에 넣어 같은 장면을 3회 만든다. 시간, 최저 VRAM·RAM, 장소 일치 여부를 기록한다.
   - 결정 규칙
@@ -61,7 +61,7 @@ _예상 소요: 약 30시간_
 
 ### 작업 그룹 B: 저장소
 
-- [ ] **T1.B.1** — 스키마 3
+- [x] **T1.B.1** — 스키마 3
   - 파일: `src/aiassetstudio/store/db.py`, `store/models.py`, `tests/test_db.py`
   - 내용:
     - `SCHEMA_VERSION = 3`, `_UPGRADES[2]`와 `_SCHEMA`에 같은 표를 추가한다.
@@ -74,12 +74,12 @@ _예상 소요: 약 30시간_
     - 기존 `_JSON_FIELDS`, `_encode`, `_decode`를 재사용한다.
   - 검증: `uv run pytest tests/test_db.py` (버전 2 DB가 3으로 올라가는 케이스 포함)
 
-- [ ] **T1.B.2** — 책 API
+- [x] **T1.B.2** — 책 API
   - 파일: `src/aiassetstudio/api/app.py`, `api/schemas.py`, `tests/test_api.py`
   - 내용: `POST/GET /api/books`, `GET /api/books/{id}`(쪽, 시트, 진행 수 포함), `PUT /api/books/{id}/pages`(쪽 일괄 저장, 채택한 쪽의 `image_prompt`가 바뀌면 `draft`로 되돌림. `text`만 바뀌면 그림 채택은 유지하고, Phase 2부터 낭독만 다시 만들 대상으로 표시), `PUT /api/books/{id}/sheets`, `PUT /api/books/{id}/terms`, `PATCH /api/pages/{id}`(`status`, `note`, `image_asset_id`). 오류 문구는 영어 `HTTPException`.
   - 검증: `uv run pytest tests/test_api.py`
 
-- [ ] **T1.B.3** — 출처와 라이선스 기록
+- [x] **T1.B.3** — 출처와 라이선스 기록
   - 파일: `src/aiassetstudio/provenance.py`(신규), `jobs/runners.py`, `tests/test_provenance.py`
   - 내용:
     - `MODEL_LICENSES: dict[str, ModelLicense]`. `ModelLicense(name, license, class_)`, `class_`는 `open | community | research_only | unknown`.
@@ -90,7 +90,7 @@ _예상 소요: 약 30시간_
 
 ### 작업 그룹 C: 전면 삽화 작업
 
-- [ ] **T1.C.1** — 다중 참조 그래프
+- [x] **T1.C.1** — 다중 참조 그래프
   - 파일: `src/aiassetstudio/comfy/graphs.py`, `tests/test_graphs.py`
   - 내용:
     - `Reference` 단일 인자를 유지하면서 `refs: Sequence[Reference]`를 받는 내부 함수로 바꾼다. 두 번째 이후는 `images.image_N`에 넣는다.
@@ -100,7 +100,7 @@ _예상 소요: 약 30시간_
     - 기존 스프라이트 그래프 결과는 달라지면 안 된다.
   - 검증: `uv run pytest tests/test_graphs.py`
 
-- [ ] **T1.C.2** — 쪽 프롬프트 조립
+- [x] **T1.C.2** — 쪽 프롬프트 조립
   - 파일: `src/aiassetstudio/book_prompts.py`(신규), `tests/test_book_prompts.py`
   - 내용: `page_prompt(project_style, sheets, page) -> PagePrompt(text, ref_paths)`. 입력은 쪽의 `cast`, `place`와 시트다.
     - 참조가 있는 인물은 "첫 번째 참조는 ~" 문장, 나머지는 시트 설명을 넣는다.
@@ -109,7 +109,7 @@ _예상 소요: 약 30시간_
     - 프로젝트 화풍과 공통 금지 문구를 끝에 넣는다.
   - 검증: `uv run pytest tests/test_book_prompts.py`
 
-- [ ] **T1.C.3** — `page_image` 실행기
+- [x] **T1.C.3** — `page_image` 실행기
   - 파일: `src/aiassetstudio/jobs/runners.py`, `api/app.py`, `tests/test_runners.py`
   - 내용:
     - `run_image_job`의 인코딩 → `/free` → 생성 순서를 그대로 쓴다. 참조는 `lw_` 대신 `book_<id>_<sheet>.png`로 올린다.
@@ -122,12 +122,12 @@ _예상 소요: 약 30시간_
 
 ### 작업 그룹 D: 근거 원문과 MCP
 
-- [ ] **T1.D.1** — 원작 변경 감지
+- [x] **T1.D.1** — 원작 변경 감지
   - 파일: `api/app.py`, `tests/test_api.py`
   - 내용: `source_refs`는 `[{"node_id","content_version","label"}]`. `POST /api/books/{id}/check-sources`는 호출자가 준 현재 `{node_id: content_version}`과 비교해 바뀐 쪽을 돌려준다. Studio는 linetta를 부르지 않는다.
   - 검증: `uv run pytest tests/test_api.py`
 
-- [ ] **T1.D.2** — MCP 도구
+- [x] **T1.D.2** — MCP 도구
   - 파일: `src/aiassetstudio/mcp_bridge/server.py`, `tools.py`, `studio_api.py`, `tests/test_mcp_tools.py`
   - 내용:
     - 도구: `create_book`, `set_book_pages`, `set_book_sheets`, `set_book_terms`, `get_book`, `generate_pages`, `set_page`, `check_book_sources`, `export_book`.
@@ -140,7 +140,7 @@ _예상 소요: 약 30시간_
 
 ### 작업 그룹 E: 갤러리와 내보내기
 
-- [ ] **T1.E.1** — 책 화면
+- [x] **T1.E.1** — 책 화면
   - 파일: `web/src/App.tsx`, `web/src/api.ts`, `web/src/components/BookView.tsx`, `PageCard.tsx`
   - 내용:
     - 경로 `#/books/<id>`. 상단에 진행 수(승인/전체)와 연구 전용 표시, 쪽 카드에 그림·본문·근거 라벨·후보 전환이 있다.
@@ -149,7 +149,7 @@ _예상 소요: 약 30시간_
     - 기존 `index.css` 토큰을 따른다.
   - 검증: `npm run build`, `npm run lint`
 
-- [ ] **T1.E.2** — PDF 내보내기
+- [x] **T1.E.2** — PDF 내보내기
   - 파일: `src/aiassetstudio/post/book.py`(신규), `jobs/runners.py`, `config.py`, `pyproject.toml`, `tests/test_post_book.py`
   - 내용:
     - `reportlab`으로 표지 + 쪽 + 판권을 만든다. 레이아웃은 `spikes/studio/layout_book.py`(그림 위, 글 아래, 1480×1500 비율)를 옮긴다. 글은 이미지가 아닌 텍스트로 넣는다.
@@ -160,23 +160,36 @@ _예상 소요: 약 30시간_
     - dev 의존 `pypdf`로 본문 추출을 시험한다.
   - 검증: `uv run pytest tests/test_post_book.py`
 
+## 구현 메모 (2026-11-01)
+
+지시서와 달라진 점이다.
+
+- 쪽의 인물 열은 `cast`가 SQLite 키워드라 `people`로 했다. 소품을 위한 `props`를 더했다. 시험에서 소품 실패가 3쪽이었다.
+- 라이선스 기록은 기존 `meta.models`(역할 → 파일) 형식을 깨지 않도록 `meta.licenses`에 넣었다.
+- 장소 시트는 빈 불투명 그림이어야 해서 `POST /api/sheets/{id}/generate`와 MCP `generate_sheet`를 더했다(T1.A.2 결과). 인물 시트는 기존 스프라이트 경로를 쓴다.
+- 쪽 상태 `queued`는 `release_idle_pages`가 정리한다. 실패, 취소, 재시작을 한곳에서 처리한다.
+- `get_book`의 대기 쪽 미리보기는 채택된 그림만 보낸다.
+- MCP `set_page`에는 `approved`가 없다. 승인은 사람이 갤러리에서만 한다.
+- 책 작업은 프로젝트의 작업 목록에서 빼고 책 화면에서 본다.
+- PDF 글꼴은 Windows Batang을 기본으로 임베드한다. 공개 배포 전에 글꼴 라이선스를 확인한다.
+
 ---
 
 ### ✅ Checkpoint: Phase 1 완료 확인
 
 **구현 확인:**
-- [ ] 기존 스프라이트, BGM, 애니메이션 작업이 그대로 동작한다.
-- [ ] 쪽을 다시 만들어도 이전 후보가 남고 채택을 바꿀 수 있다.
-- [ ] 채택한 쪽의 그림 프롬프트를 바꾸면 `draft`로 돌아가고, 본문만 바꾸면 그림 채택이 유지된다.
+- [x] 기존 스프라이트, BGM, 애니메이션 작업이 그대로 동작한다.
+- [x] 쪽을 다시 만들어도 이전 후보가 남고 채택을 바꿀 수 있다.
+- [x] 채택한 쪽의 그림 프롬프트를 바꾸면 `draft`로 돌아가고, 본문만 바꾸면 그림 채택이 유지된다.
 
 **실행 확인:**
-- [ ] `uv run pytest`, `uv run ruff check .`, `npm run lint`, `npm run build`
-- [ ] GPU 종단검증 `uv run pytest -m gpu tests/gpu/test_book.py`: 2쪽 책 생성부터 PDF까지
+- [x] `uv run pytest`, `uv run ruff check .`, `npm run lint`, `npm run build`
+- [x] GPU 종단검증 `uv run pytest -m gpu tests/gpu/test_book_e2e.py`: 2쪽 책 생성부터 PDF까지
 
 **수동 확인:**
 - [ ] 다른 폴더의 Claude Code 세션에서 linetta 작품 일부를 읽어 8쪽 이상 책을 만든다.
 - [ ] 갤러리에서 재작업 메모를 남기면 에이전트가 `get_book`으로 읽고 다시 만든다.
-- [ ] PDF에서 글자를 선택할 수 있고 한글이 깨지지 않는다.
+- [x] PDF에서 글자를 선택할 수 있고 한글이 깨지지 않는다.
 
 **이 체크포인트를 통과하면 사용자에게 확인 요청 후 Phase 2로 진행.**
 실패하면 실패 항목을 보고하고, 원인을 함께 파악해 수정한 뒤 다시 검증한다.

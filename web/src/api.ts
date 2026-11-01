@@ -2,7 +2,8 @@
 
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 export type AssetStatus = 'candidate' | 'selected' | 'rejected'
-export type AssetKind = 'sprite' | 'icon' | 'bgm' | 'animation'
+export type AssetKind = 'sprite' | 'icon' | 'bgm' | 'animation' | 'page_image' | 'book_export'
+export type PageStatus = 'draft' | 'queued' | 'candidate' | 'approved' | 'redo'
 
 export interface Project {
   id: number
@@ -26,7 +27,7 @@ export interface Job {
   id: string
   project_id: number
   project: string
-  kind: 'image' | 'bgm' | 'animation'
+  kind: 'image' | 'bgm' | 'animation' | 'page_image' | 'book_export'
   family: string
   params: {
     kind?: string
@@ -178,6 +179,54 @@ export interface JobWithAssets extends Job {
   assets: Asset[]
 }
 
+export interface SourceRef {
+  node_id: string
+  content_version: number
+  label?: string
+}
+
+export interface Page {
+  id: string
+  book_id: string
+  number: number
+  text: string
+  image_prompt: string
+  people: string[]
+  props: string[]
+  place: string | null
+  source_refs: SourceRef[]
+  image_asset_id: string | null
+  status: PageStatus
+  note: string | null
+  candidates: Asset[]
+}
+
+export interface Sheet {
+  id: string
+  kind: 'character' | 'place' | 'prop'
+  name: string
+  description: string
+  asset_id: string | null
+  asset: Asset | null
+}
+
+export interface BookSummary {
+  id: string
+  project: string
+  title: string
+  created_at: string
+}
+
+export interface Book extends BookSummary {
+  width: number
+  height: number
+  cover_page: number | null
+  pages: Page[]
+  sheets: Sheet[]
+  counts: Partial<Record<PageStatus, number>>
+  license_class: 'open' | 'community' | 'unknown' | 'research_only' | null
+}
+
 export interface FamilyStatus {
   ok: boolean
   missing_nodes: string[]
@@ -256,3 +305,14 @@ export const exportAsset = (id: string, options: { dest_dir?: string; name?: str
   })
 export const cancelJob = (id: string) =>
   request<JobWithAssets>(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
+export const listBooks = (project: string) => request<BookSummary[]>(`/api/books${query({ project })}`)
+export const getBook = (id: string) => request<Book>(`/api/books/${encodeURIComponent(id)}`)
+export const updatePage = (
+  id: string,
+  fields: { status?: 'approved' | 'redo' | 'draft'; note?: string | null; image_asset_id?: string },
+) => request<Page>(`/api/pages/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(fields) })
+export const exportBook = (id: string, allowDraft: boolean) =>
+  request<{ job_id: string }>(`/api/books/${encodeURIComponent(id)}/export`, {
+    method: 'POST',
+    body: JSON.stringify({ allow_draft: allowDraft }),
+  })
