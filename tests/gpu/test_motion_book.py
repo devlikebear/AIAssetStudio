@@ -61,8 +61,16 @@ def test_two_page_motion_book(book):
     made = client.post("/api/books", json={"project": "gpu-motion", "title": "시험 영상"}).json()
     url = f"/api/books/{made['id']}"
     pages = [
-        {"number": 1, "text": "강가의 집에 저녁이 왔다. 물은 조용했다.", "image_prompt": "An empty riverside house at dusk."},
-        {"number": 2, "text": "바람이 갈대를 흔들었다.", "image_prompt": "Tall reeds beside a wide river, nobody around."},
+        {
+            "number": 1,
+            "text": "강가의 집에 저녁이 왔다. 물은 조용했다.",
+            "image_prompt": "An empty riverside house at dusk.",
+        },
+        {
+            "number": 2,
+            "text": "바람이 갈대를 흔들었다.",
+            "image_prompt": "Tall reeds beside a wide river, nobody around.",
+        },
     ]
     client.put(f"{url}/pages", json=pages).raise_for_status()
     for job_id in client.post(f"{url}/generate", json={"seed": 21}).json()["job_ids"]:

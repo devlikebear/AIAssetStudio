@@ -281,11 +281,15 @@ def _pack_out(s: Services, pack: PackSpec) -> PackOut:
     status = row.status if row else "not_installed"
     if status == "installed" and not s.packs.is_installed(pack.id):
         status = "not_installed"  # an older version: this one still needs consent and an install
+    if s.packs.is_external(pack):
+        status = "external"
     return PackOut(
         id=pack.id,
         title=pack.title,
         feature=pack.feature,
         version=pack.version,
+        engine=pack.engine,
+        adopted=s.packs.adopted(pack),
         download_size=pack.download_size,
         tested=pack.tested.model_dump(),
         gated=pack.gated,

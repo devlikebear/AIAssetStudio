@@ -1,0 +1,35 @@
+{
+  "id": "engine-comfyui",
+  "title": "ComfyUI 엔진",
+  "feature": "engine",
+  "version": "0.37.0",
+  "engine": "comfy_engine",
+  "licenses": [
+    {
+      "id": "gpl-3.0",
+      "name": "GNU General Public License v3.0",
+      "class": "open",
+      "url": "https://raw.githubusercontent.com/comfyanonymous/ComfyUI/v0.37.0/LICENSE",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "summary_ko": "상업 사용 가능. 지역 제한 없음. 연구 전용 아님. 프로그램을 수정해 배포하면 소스 공개 의무가 있습니다. 만든 그림과 영상에는 적용되지 않습니다."
+    }
+  ],
+  "files": [],
+  "git": {
+    "url": "https://github.com/comfyanonymous/ComfyUI",
+    "tag": "v0.37.0"
+  },
+  "python": "3.13",
+  "torch_index": "https://download.pytorch.org/whl/cu130",
+  "torch_packages": [
+    "torch==2.14.0+cu130",
+    "torchaudio==2.11.0+cu130",
+    "torchvision==0.29.0+cu130"
+  ],
+  "tested": {
+    "vram_gb": 16,
+    "ram_gb": 32,
+    "os": "Windows 11",
+    "disk_gb": 10
+  }
+}

@@ -89,8 +89,7 @@ def narrate(client, book_id: str, **body) -> list[dict]:
 
 
 def test_packs_are_listed_with_what_a_person_needs(client):
-    [pack] = client.get("/api/packs").json()
-    assert pack["id"] == "speech-ko"
+    pack = {p["id"]: p for p in client.get("/api/packs").json()}["speech-ko"]
     assert pack["status"] == "not_installed"
     assert pack["download_size"] > 4 * 2**30
     assert pack["licenses"][0]["accepted"] is False
@@ -152,7 +151,7 @@ def test_a_changed_license_is_shown(client):
 
 
 def test_status_names_the_packs(client):
-    assert client.get("/api/status").json()["packs"] == {"speech-ko": "not_installed"}
+    assert client.get("/api/status").json()["packs"]["speech-ko"] == "not_installed"
 
 
 def test_narrating_without_the_pack_points_to_the_gallery(client):
@@ -283,3 +282,17 @@ def test_mp3_export_records_where_each_page_starts(client):
     assert r.status_code == 200, r.text
     y, sr = load_audio(r.json()["paths"][0])
     assert abs(len(y) / sr - 3.2) < 0.1
+
+
+def test_a_comfyui_already_here_needs_no_engine_pack(settings, fake_comfy, sidecar, tmp_path):
+    settings.comfy_dir.mkdir()
+    (settings.comfy_dir / "main.py").write_text("")
+    app = create_app(settings, comfy_transport=fake_comfy.transport, sidecar=sidecar)
+    with TestClient(app, base_url=BASE_URL) as local:
+        assert local.get("/api/packs/engine-comfyui").json()["status"] == "external"
+        local.post(
+            "/api/packs/engine-comfyui/accept", json={"licenses": ["gpl-3.0"]}, headers=GALLERY
+        ).raise_for_status()
+        r = local.post("/api/packs/engine-comfyui/install", headers=CLI)
+        assert r.status_code == 409
+        assert "needs no engine pack" in r.json()["detail"]

@@ -267,7 +267,9 @@ export interface Pack {
   tested: { vram_gb: number; ram_gb: number; disk_gb: number; os: string }
   gated: boolean
   licenses: PackLicense[]
-  status: 'not_installed' | 'installing' | 'installed' | 'failed' | 'cancelled'
+  engine: string
+  status: 'not_installed' | 'external' | 'installing' | 'installed' | 'failed' | 'cancelled'
+  adopted: string[]
   stage: string | null
   error: string | null
   license_changed: boolean

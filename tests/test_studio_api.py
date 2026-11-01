@@ -122,7 +122,7 @@ async def test_the_mcp_client_can_neither_agree_nor_install(settings, fake_comfy
     app = create_app(settings, comfy_transport=fake_comfy.transport)
     async with app.router.lifespan_context(app):
         mcp = StudioApi("http://127.0.0.1:8765", transport=httpx.ASGITransport(app=app))
-        assert (await mcp.list_packs())[0]["id"] == "speech-ko"
+        assert "speech-ko" in {pack["id"] for pack in await mcp.list_packs()}
         with pytest.raises(BackendError, match="403"):
             await mcp.install_pack("speech-ko")
         with pytest.raises(BackendError, match="403"):

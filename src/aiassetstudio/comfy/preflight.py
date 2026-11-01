@@ -143,6 +143,7 @@ REQUIRED: dict[str, Requirement] = {
             "VAEDecode",
             "CreateVideo",
             "SaveVideo",
+            "PreviewAny",
         ),
         models={
             "diffusion_models": (WAN_UNET_HIGH, WAN_UNET_LOW),

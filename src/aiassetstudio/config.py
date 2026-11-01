@@ -71,6 +71,25 @@ def is_loopback(host: str) -> bool:
         return False
 
 
+def engine_comfy_dir(settings: Settings) -> Path:
+    """Where the engine-comfyui pack keeps ComfyUI."""
+    return settings.data_dir / "packs" / "engine-comfyui" / "ComfyUI"
+
+
+def comfy_is_external(settings: Settings) -> bool:
+    """A ComfyUI this app did not install: next to the repository or at AIAS_COMFY_DIR. It is used as it is, never
+    updated or changed, and the engine pack is not needed."""
+    return (settings.comfy_dir / "main.py").is_file()
+
+
+def resolve_comfy(settings: Settings) -> Path:
+    """The ComfyUI to run: the external one if there is one, else the engine pack's."""
+    engine = engine_comfy_dir(settings)
+    if comfy_is_external(settings) or not (engine / "main.py").is_file():
+        return settings.comfy_dir
+    return engine
+
+
 def find_codex_dir(settings: Settings) -> Path | None:
     """The folder of the codex CLI that animation jobs put first on sprite-gen's PATH.
 

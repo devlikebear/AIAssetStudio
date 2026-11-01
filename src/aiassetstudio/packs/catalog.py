@@ -15,8 +15,9 @@ from ..provenance import LicenseClass
 CATALOG_DIR = Path(__file__).with_name("catalog")
 # Where this PC is: a pack that excludes this region is not listed at all.
 REGION = "KR"
-LICENSE_HOSTS = ("huggingface.co", "www.apache.org")
+LICENSE_HOSTS = ("huggingface.co", "www.apache.org", "raw.githubusercontent.com")
 FILE_HOST = "huggingface.co"
+GIT_SOURCES = ("https://github.com/comfyanonymous/ComfyUI",)
 
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
@@ -65,6 +66,18 @@ class PackFile(BaseModel):
         return f"https://{FILE_HOST}/{self.repo}/resolve/{self.revision}/{self.path}"
 
 
+class GitSource(BaseModel):
+    url: str
+    tag: str  # fixed: a pack never follows a branch
+
+    @field_validator("url")
+    @classmethod
+    def check_url(cls, value: str) -> str:
+        if value not in GIT_SOURCES:
+            raise ValueError(f"a pack clones only {GIT_SOURCES}, not {value!r}")
+        return value
+
+
 class Measured(BaseModel):
     vram_gb: int
     ram_gb: int
@@ -78,12 +91,14 @@ class PackSpec(BaseModel):
     feature: str
     version: str
     engine: Literal["python_sidecar", "comfy_models", "comfy_engine"]
-    model_dir: str  # relative to the pack's folder
+    model_dir: str = ""  # a sidecar's model, relative to the pack's folder
     licenses: Annotated[list[PackLicense], Field(min_length=1)]
-    files: Annotated[list[PackFile], Field(min_length=1)]
+    # dest is relative to the pack's folder, or for comfy_models to ComfyUI's models folder
+    files: list[PackFile] = Field(default_factory=list)
+    git: GitSource | None = None  # comfy_engine: what to clone
     requirements: list[str] = Field(default_factory=list)
-    python: str
-    torch_index: str
+    python: str = ""
+    torch_index: str = ""
     torch_packages: list[str] = Field(default_factory=list)
     tested: Measured
     gated: bool = False
@@ -92,10 +107,14 @@ class PackSpec(BaseModel):
     @field_validator("model_dir")
     @classmethod
     def check_model_dir(cls, value: str) -> str:
-        return _relative(value)
+        return _relative(value) if value else value
 
     @model_validator(mode="after")
     def check_unique(self) -> "PackSpec":
+        if self.engine == "comfy_engine" and self.git is None:
+            raise ValueError(f"pack {self.id}: an engine needs a git source")
+        if self.engine != "comfy_engine" and not self.files:
+            raise ValueError(f"pack {self.id}: no files")
         if len({f.dest for f in self.files}) != len(self.files):
             raise ValueError(f"pack {self.id}: two files share a dest")
         if len({lic.id for lic in self.licenses}) != len(self.licenses):

@@ -3,9 +3,15 @@ import { useState } from 'react'
 import { acceptPack, cancelPack, installPack, listPacks, type Pack, removePack } from '../api'
 import { usePoll } from '../hooks'
 
-const FEATURE_LABEL: Record<string, string> = { audiobook: '오디오북' }
+const FEATURE_LABEL: Record<string, string> = {
+  audiobook: '오디오북',
+  engine: '생성 엔진',
+  image: '그림',
+  video: '영상',
+}
 const STATUS_LABEL: Record<string, string> = {
   not_installed: '설치 안 됨',
+  external: '기존 ComfyUI 사용',
   installing: '설치 중',
   installed: '설치됨',
   failed: '설치 실패',
@@ -128,11 +134,13 @@ function PackCard({ pack, onError, onChanged }: { pack: Pack; onError: Props['on
         ))}
       </ul>
 
+      {pack.status === 'external' && <p className="pack-stage">이 PC의 ComfyUI를 그대로 씁니다. 설치할 필요가 없고, Studio는 그것을 바꾸지 않습니다.</p>}
+      {pack.adopted.length > 0 && <p className="pack-stage">이미 있던 파일 {pack.adopted.length}개를 사용합니다. 팩을 삭제해도 지우지 않습니다.</p>}
       {pack.stage && <p className="pack-stage">{pack.stage}</p>}
       {pack.error && !pack.license_changed && <p className="pack-error">{pack.error}</p>}
 
       <div className="page-actions">
-        {pack.status !== 'installed' && !installing && (
+        {pack.status !== 'installed' && pack.status !== 'external' && !installing && (
           <>
             <button type="button" className="btn btn-primary" disabled={busy || !allAgreed} onClick={install}>
               {newlyAgreed.length ? '동의하고 설치' : '설치'}

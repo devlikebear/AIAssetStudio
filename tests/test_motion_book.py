@@ -44,6 +44,11 @@ def test_a_clip_starts_from_the_page_picture(client, fake_comfy: FakeComfy):  # 
     assert "ink wash" in text
     assert graph["11"]["inputs"]["image"].endswith(".png")
     assert WAN_OUTPUT_NODE in graph
+    encode = fake_comfy.graphs[-2]  # the text encoder leaves memory before the video models load
+    assert encode["8"] == graph["8"]
+    assert encode["9"] == graph["9"]
+    assert {n["class_type"] for k, n in encode.items() if k in ("20", "21")} == {"PreviewAny"}
+    assert fake_comfy.free_calls[-1] == {"unload_models": True, "free_memory": False}
 
     [page] = client.get(f"/api/books/{book['id']}").json()["pages"]
     assert page["clip_status"] == "candidate"

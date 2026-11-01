@@ -44,6 +44,7 @@ from ..comfy.graphs import (
     qwen_t2i_turbo,
     qwen_text_encode,
     wan_i2v_lightning,
+    wan_text_encode,
     yue2_song,
 )
 from ..config import Settings
@@ -705,6 +706,16 @@ async def run_clip_job(ctx: RunContext, job: Job) -> None:
         )
     ctx.db.update_job(job.id, stage="uploading the picture")
     image = await ctx.comfy.upload_image(_page_picture(ctx, page), f"clip_{page.id}.png")
+    ctx.db.update_job(job.id, stage="encoding prompt")
+    t0 = time.monotonic()
+    encode_id = str(uuid.uuid4())
+    ctx.prompt_ids.append(encode_id)
+    await ctx.comfy.submit(wan_text_encode(prompt), prompt_id=encode_id)
+    await ctx.comfy.free(unload_models=True, free_memory=False)  # applied right after the encode prompt
+    await ctx.comfy.wait(encode_id, timeout=ctx.settings.clip_timeout)
+    encode_s = time.monotonic() - t0
+    if ctx.cancel_requested():
+        raise JobCancelled()
     ctx.db.update_job(job.id, stage="generating")
     asset_id = new_id()
     prompt_id = str(uuid.uuid4())
@@ -721,7 +732,7 @@ async def run_clip_job(ctx: RunContext, job: Job) -> None:
     directory = asset_dir(ctx.settings, project.slug, asset_id)
     ctx.db.update_job(job.id, stage="postprocess")
     await asyncio.to_thread(_save_clip, data, directory, ctx.settings.ffmpeg)
-    step = {"generate": round(t1 - t0, 2)}
+    step = {"encode": round(encode_s, 2), "generate": round(t1 - t0, 2)}
     meta = {
         "book_id": page.book_id,
         "clip_page_id": page.id,  # not page_id: that key finds a page's pictures

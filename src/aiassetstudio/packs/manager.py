@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from collections.abc import Awaitable, Callable, Sequence
@@ -15,12 +16,12 @@ from pathlib import Path
 
 import httpx
 
-from ..config import Settings
+from ..config import Settings, comfy_is_external, engine_comfy_dir, resolve_comfy
 from ..store.db import Database, now
 from ..store.models import PackInstall
-from .catalog import PackSpec, load_catalog
+from .catalog import PackFile, PackSpec, load_catalog
 from .consent import LicenseChanged, require_consent, verify_licenses
-from .download import DownloadError, download
+from .download import DownloadError, download, file_sha256
 
 log = logging.getLogger(__name__)
 
@@ -74,9 +75,18 @@ def pack_dir(settings: Settings, pack_id: str) -> Path:
     return packs_dir(settings) / pack_id
 
 
+def _venv_python(folder: Path) -> Path:
+    return folder / ".venv" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+
+
 def pack_python(settings: Settings, pack_id: str) -> Path:
-    bin_dir = ("Scripts", "python.exe") if sys.platform == "win32" else ("bin", "python")
-    return pack_dir(settings, pack_id) / ".venv" / Path(*bin_dir)
+    return _venv_python(pack_dir(settings, pack_id))
+
+
+def _force_remove(function, path, _error) -> None:
+    """git keeps its objects read-only, which Windows will not delete."""
+    os.chmod(path, stat.S_IWRITE)
+    function(path)
 
 
 class PackManager:
@@ -113,6 +123,23 @@ class PackManager:
         pack, row = self.catalog.get(pack_id), self.db.get_install(pack_id)
         return pack is not None and row is not None and row.status == "installed" and row.version == pack.version
 
+    def root(self, pack: PackSpec) -> Path:
+        """The folder a pack's file paths are relative to."""
+        if pack.engine == "comfy_models":
+            return resolve_comfy(self.settings) / "models"
+        return pack_dir(self.settings, pack.id)
+
+    def adopted(self, pack: PackSpec) -> list[str]:
+        """Files of the pack that were already there. They are used, and a removal leaves them."""
+        row = self.db.get_install(pack.id)
+        if pack.engine != "comfy_models" or row is None or row.status != "installed":
+            return []
+        return [f.dest for f in pack.files if f.dest not in row.files]
+
+    def is_external(self, pack: PackSpec) -> bool:
+        """An engine pack that is not needed, because a ComfyUI this app did not install is in use."""
+        return pack.engine == "comfy_engine" and comfy_is_external(self.settings)
+
     def log_tail(self, pack_id: str) -> str:
         path = pack_dir(self.settings, pack_id) / LOG_NAME
         if not path.is_file():
@@ -128,6 +155,10 @@ class PackManager:
             raise PackError(f"pack {pack_id} is already being installed")
         if self.is_installed(pack_id):
             raise PackError(f"pack {pack_id} is already installed")
+        if self.is_external(pack):
+            raise PackError(f"Studio uses the ComfyUI in {self.settings.comfy_dir}; it needs no engine pack")
+        if pack.engine == "comfy_models" and not (resolve_comfy(self.settings) / "main.py").is_file():
+            raise PackError(f"pack {pack_id} goes into ComfyUI; install the engine pack first")
         require_consent(self.db, pack)
         directory = pack_dir(self.settings, pack_id)
         directory.mkdir(parents=True, exist_ok=True)
@@ -137,8 +168,17 @@ class PackManager:
                 f"pack {pack_id} needs {pack.tested.disk_gb} GB of free disk; {free / 2**30:.1f} GB is free"
             )
         # Recorded before anything exists, so a failed or cancelled install can be removed too.
-        files = [".venv", "hf", "licenses", "server.py", LOG_NAME]
-        files += [f.dest for f in pack.files] + [f"{f.dest}.part" for f in pack.files]
+        # A model pack's files are recorded one by one instead: only those it really puts down.
+        files = {
+            "python_sidecar": [
+                ".venv",
+                "hf",
+                "server.py",
+                *(p for f in pack.files for p in (f.dest, f"{f.dest}.part")),
+            ],
+            "comfy_engine": ["ComfyUI"],
+            "comfy_models": [],
+        }[pack.engine]
         row = self.db.save_install(
             pack_id, version=pack.version, status="installing", stage="starting", error=None, files=files
         )
@@ -164,15 +204,24 @@ class PackManager:
         row = self.db.get_install(pack_id)
         if row is None:
             return
-        directory = pack_dir(self.settings, pack_id).resolve()
+        pack = self.catalog[pack_id]
+        if pack.engine == "comfy_engine" and any(
+            other.engine == "comfy_models" and (saved := self.db.get_install(other.id)) and saved.files
+            for other in self.catalog.values()
+        ):
+            raise PackError("the image and video packs are inside this ComfyUI; remove them first")
+        root = self.root(pack).resolve()
         for rel in row.files:
-            path = (directory / rel).resolve()
-            if not path.is_relative_to(directory):
+            path = (root / rel).resolve()
+            if not path.is_relative_to(root):
                 raise PackError(f"pack {pack_id} recorded a path outside its folder: {rel}")
             if path.is_dir():
-                shutil.rmtree(path)
+                shutil.rmtree(path, onexc=_force_remove)
             else:
                 path.unlink(missing_ok=True)
+        directory = pack_dir(self.settings, pack_id).resolve()
+        shutil.rmtree(directory / "licenses", ignore_errors=True)
+        (directory / LOG_NAME).unlink(missing_ok=True)
         for folder in sorted((p for p in directory.rglob("*") if p.is_dir()), key=lambda p: -len(p.parts)):
             if not any(folder.iterdir()):
                 folder.rmdir()
@@ -218,15 +267,28 @@ class PackManager:
             for license_id, text in texts.items():
                 (directory / "licenses" / f"{license_id}.txt").write_bytes(text)
             for i, file in enumerate(pack.files, start=1):
-                await self._download(client, pack, file, i)
+                await self._file(client, pack, file, i)
+        if pack.engine == "comfy_models":
+            return
+        if pack.git is not None:
+            await self._clone(pack, directory)
         await self._environment(pack, directory)
         script = SIDECAR_SCRIPT.get(pack.feature)
         if script:
             shutil.copyfile(ASSETS_DIR / script, directory / "server.py")
 
-    async def _download(self, client: httpx.AsyncClient, pack: PackSpec, file, index: int) -> None:
-        directory = pack_dir(self.settings, pack.id)
+    async def _file(self, client: httpx.AsyncClient, pack: PackSpec, file: PackFile, index: int) -> None:
+        root = self.root(pack)
         of = f"{index}/{len(pack.files)} {Path(file.dest).name}"
+        if pack.engine == "comfy_models":
+            dest = root / file.dest
+            if dest.is_file():
+                self._stage(pack.id, f"checking {of}")
+                if await asyncio.to_thread(file_sha256, dest) == file.sha256:
+                    return
+                raise PackError(f"{dest} is already there but is a different file; Studio will not replace it")
+            saved = self.db.get_install(pack.id).files
+            self.db.save_install(pack.id, files=[*saved, file.dest, f"{file.dest}.part"])
         self._stage(pack.id, f"downloading {of}")
         shown = 0.0
 
@@ -237,23 +299,40 @@ class PackManager:
                 shown = share
                 self._stage(pack.id, f"downloading {of} {share:.0%}")
 
-        await download(client, file.url, directory / file.dest, file.size, file.sha256, progress)
+        await download(client, file.url, root / file.dest, file.size, file.sha256, progress)
 
-    async def _environment(self, pack: PackSpec, directory: Path) -> None:
-        """The pack's own Python. torch comes last: `qwen-tts` pulls the CPU build, which would otherwise stay."""
+    async def _run_step(self, pack: PackSpec, cwd: Path, stage: str, args: list[str]) -> None:
+        directory = pack_dir(self.settings, pack.id)
         log_path = directory / LOG_NAME
         env = dict(os.environ, HF_HOME=str(directory / "hf"), PYTHONIOENCODING="utf-8")
-        python = str(pack_python(self.settings, pack.id))
+        self._stage(pack.id, stage)
+        code = await self.run(args, cwd, log_path, env)
+        if code != 0:
+            raise PackError(f"{stage} failed (exit {code}); see {log_path}")
+
+    async def _clone(self, pack: PackSpec, directory: Path) -> None:
+        """The engine at its fixed tag. A partial clone from a failed try is replaced."""
+        target = directory / "ComfyUI"
+        if (target / "main.py").is_file():
+            return
+        if target.exists():
+            shutil.rmtree(target, onexc=_force_remove)
+        args = ["git", "clone", "--depth", "1", "--branch", pack.git.tag, pack.git.url, "ComfyUI"]
+        await self._run_step(pack, directory, "cloning ComfyUI", args)
+
+    async def _environment(self, pack: PackSpec, directory: Path) -> None:
+        """The pack's own Python, or the engine's inside its clone. torch comes last: `qwen-tts` pulls the CPU build,
+        which would otherwise stay."""
+        home = engine_comfy_dir(self.settings) if pack.git is not None else directory
+        python = str(_venv_python(home))
 
         async def step(stage: str, args: list[str]) -> None:
-            self._stage(pack.id, stage)
-            code = await self.run(args, directory, log_path, env)
-            if code != 0:
-                raise PackError(f"{stage} failed (exit {code}); see {log_path}")
+            await self._run_step(pack, home, stage, args)
 
         if not Path(python).is_file():
             await step("creating environment", ["uv", "venv", "--python", pack.python, ".venv"])
-        await step("installing packages", ["uv", "pip", "install", "--python", python, *pack.requirements])
+        packages = ["-r", "requirements.txt"] if pack.git is not None else pack.requirements
+        await step("installing packages", ["uv", "pip", "install", "--python", python, *packages])
         names = [p.split("==")[0] for p in pack.torch_packages]
         await step("removing CPU torch", ["uv", "pip", "uninstall", "--python", python, *names])
         await step(

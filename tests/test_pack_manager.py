@@ -5,8 +5,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from aiassetstudio.config import Settings
-from aiassetstudio.packs.catalog import Measured, PackFile, PackLicense, PackSpec
+from aiassetstudio.config import Settings, comfy_is_external, resolve_comfy
+from aiassetstudio.packs.catalog import GitSource, Measured, PackFile, PackLicense, PackSpec
 from aiassetstudio.packs.consent import ConsentRequired, accept
 from aiassetstudio.packs.download import ChecksumError, DownloadError, download
 from aiassetstudio.packs.manager import InsufficientDisk, PackError, PackManager, pack_dir, pack_python
@@ -317,3 +317,179 @@ async def test_download_reports_short_and_refused_files(tmp_path):
         with pytest.raises(DownloadError) as e:
             await download(client, "https://huggingface.co/a", tmp_path / "b", 10, sha(b""))
     assert not isinstance(e.value, ChecksumError)
+
+
+def license_of(pack_id: str = "x") -> PackLicense:
+    return PackLicense(
+        id="apache-2.0", name="Apache", class_="open", url=LICENSE_URL, sha256=sha(LICENSE), summary_ko="x"
+    )
+
+
+def model_pack(data: bytes = MODEL) -> PackSpec:
+    return PackSpec(
+        id="video-wan22",
+        title="v",
+        feature="video",
+        version="1.0.0",
+        engine="comfy_models",
+        licenses=[license_of()],
+        files=[
+            PackFile(repo="a/b", revision=REVISION, path="m.bin", dest="loras/m.bin", size=len(data), sha256=sha(data))
+        ],
+        tested=Measured(vram_gb=16, ram_gb=32, disk_gb=1, os="Windows 11"),
+    )
+
+
+def engine_pack() -> PackSpec:
+    return PackSpec(
+        id="engine-comfyui",
+        title="e",
+        feature="engine",
+        version="0.37.0",
+        engine="comfy_engine",
+        licenses=[license_of()],
+        git=GitSource(url="https://github.com/comfyanonymous/ComfyUI", tag="v0.37.0"),
+        python="3.13",
+        torch_index="https://download.pytorch.org/whl/cu130",
+        torch_packages=["torch==1+cu130"],
+        tested=Measured(vram_gb=16, ram_gb=32, disk_gb=1, os="Windows 11"),
+    )
+
+
+@pytest.fixture
+def comfy(tmp_path):
+    """Settings with a ComfyUI this app did not install."""
+    folder = tmp_path / "ComfyUI"
+    (folder / "models" / "loras").mkdir(parents=True)
+    (folder / "main.py").write_text("")
+    return Settings(data_dir=tmp_path / "data", comfy_dir=folder)
+
+
+def manager_for(settings, tmp_path, pack, hub=None, commands=None) -> PackManager:
+    db = Database(tmp_path / "packs.db")
+    accept(db, pack, ["apache-2.0"])
+    return PackManager(
+        settings,
+        db,
+        catalog={pack.id: pack},
+        transport=httpx.MockTransport(hub or Hub()),
+        run=commands or Commands(),
+        disk_free=lambda path: 10 * 2**30,
+    )
+
+
+async def test_a_model_pack_goes_into_comfyui_and_comes_out_again(comfy, tmp_path):
+    pack = model_pack()
+    manager = manager_for(comfy, tmp_path, pack)
+    manager.install(pack.id)
+    row = await finished(manager, pack.id)
+    assert row.status == "installed", row.error
+    dest = comfy.comfy_dir / "models/loras/m.bin"
+    assert dest.read_bytes() == MODEL
+    assert manager.adopted(pack) == []
+    manager.remove(pack.id)
+    assert not dest.exists()
+    assert (comfy.comfy_dir / "models/loras").is_dir()  # ComfyUI's own folder stays
+    manager.db.close()
+
+
+async def test_a_file_already_in_place_is_adopted_and_stays(comfy, tmp_path):
+    pack = model_pack()
+    dest = comfy.comfy_dir / "models/loras/m.bin"
+    dest.write_bytes(MODEL)
+    hub = Hub()
+    manager = manager_for(comfy, tmp_path, pack, hub)
+    manager.install(pack.id)
+    row = await finished(manager, pack.id)
+    assert row.status == "installed", row.error
+    assert hub.ranges == []
+    assert row.files == []
+    assert manager.adopted(pack) == ["loras/m.bin"]
+    manager.remove(pack.id)
+    assert dest.read_bytes() == MODEL
+    manager.db.close()
+
+
+async def test_a_different_file_in_the_way_is_never_replaced(comfy, tmp_path):
+    pack = model_pack()
+    dest = comfy.comfy_dir / "models/loras/m.bin"
+    dest.write_bytes(b"mine")
+    manager = manager_for(comfy, tmp_path, pack)
+    manager.install(pack.id)
+    row = await finished(manager, pack.id)
+    assert row.status == "failed"
+    assert "will not replace" in row.error
+    assert dest.read_bytes() == b"mine"
+    manager.remove(pack.id)
+    assert dest.read_bytes() == b"mine"
+    manager.db.close()
+
+
+async def test_an_external_comfyui_needs_no_engine_pack(comfy, tmp_path):
+    pack = engine_pack()
+    commands = Commands()
+    manager = manager_for(comfy, tmp_path, pack, commands=commands)
+    assert manager.is_external(pack)
+    assert resolve_comfy(comfy) == comfy.comfy_dir
+    with pytest.raises(PackError, match="needs no engine pack"):
+        manager.install(pack.id)
+    assert commands.calls == []
+    assert sorted(p.name for p in comfy.comfy_dir.iterdir()) == ["main.py", "models"]
+    manager.db.close()
+
+
+async def test_a_model_pack_needs_a_comfyui(tmp_path):
+    settings = Settings(data_dir=tmp_path / "data", comfy_dir=tmp_path / "none")
+    pack = model_pack()
+    manager = manager_for(settings, tmp_path, pack)
+    with pytest.raises(PackError, match="install the engine pack first"):
+        manager.install(pack.id)
+    manager.db.close()
+
+
+class FakeGit(Commands):
+    async def __call__(self, args, cwd, log_path, env):
+        if args[:2] == ["git", "clone"]:
+            target = cwd / args[-1]
+            (target / ".git").mkdir(parents=True)
+            read_only = target / ".git" / "object"
+            read_only.write_text("x")
+            read_only.chmod(0o444)
+            (target / "main.py").write_text("")
+        return await super().__call__(args, cwd, log_path, env)
+
+
+async def test_the_engine_pack_clones_its_tag_and_is_then_the_comfyui(tmp_path):
+    settings = Settings(data_dir=tmp_path / "data", comfy_dir=tmp_path / "none")
+    pack = engine_pack()
+    commands = FakeGit()
+    manager = manager_for(settings, tmp_path, pack, commands=commands)
+    assert not comfy_is_external(settings)
+    manager.install(pack.id)
+    row = await finished(manager, pack.id)
+    assert row.status == "installed", row.error
+    clone = commands.calls[0]
+    assert clone[:2] == ["git", "clone"]
+    assert clone[clone.index("--branch") + 1] == "v0.37.0"
+    assert ["-r", "requirements.txt"] == commands.calls[2][-2:]
+    assert commands.calls[-1][0].endswith("python.exe") or commands.calls[-1][0].endswith("python")
+    engine = pack_dir(settings, pack.id) / "ComfyUI"
+    assert resolve_comfy(settings) == engine
+    assert ".venv" in commands.calls[-1][0]
+
+    manager.remove(pack.id)
+    assert not pack_dir(settings, pack.id).exists()
+    assert resolve_comfy(settings) == settings.comfy_dir
+    manager.db.close()
+
+
+async def test_the_engine_stays_while_model_packs_are_inside_it(tmp_path):
+    settings = Settings(data_dir=tmp_path / "data", comfy_dir=tmp_path / "none")
+    engine, models = engine_pack(), model_pack()
+    db = Database(tmp_path / "packs.db")
+    manager = PackManager(settings, db, catalog={engine.id: engine, models.id: models}, run=Commands())
+    db.save_install(engine.id, version="0.37.0", status="installed", files=["ComfyUI"])
+    db.save_install(models.id, version="1.0.0", status="installed", files=["loras/m.bin"])
+    with pytest.raises(PackError, match="remove them first"):
+        manager.remove(engine.id)
+    db.close()

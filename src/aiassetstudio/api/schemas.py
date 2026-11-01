@@ -279,7 +279,9 @@ class PackOut(BaseModel):
     tested: dict
     gated: bool
     licenses: list[PackLicenseOut]
-    status: str  # not_installed, or the install's: installing, installed, failed, cancelled
+    engine: str
+    status: str  # not_installed, external (a ComfyUI is already in use), or installing, installed, failed, cancelled
+    adopted: list[str]  # files that were already there; a removal leaves them
     stage: str | None
     error: str | None
     license_changed: bool  # the text online differs from what the catalog holds; a new Studio version must follow it

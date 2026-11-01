@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 import httpx
 
 from .comfy.preflight import VERIFIED_COMFYUI
-from .config import Settings
+from .config import Settings, resolve_comfy
 from .packs.catalog import load_catalog
 
 TESTED_VRAM_MIB = 15500  # a card sold as 16 GB reports a little under 16384 MiB
@@ -150,9 +150,10 @@ def _program_check(name: str, needed_for: str, get_it: str) -> dict:
 def _comfyui(settings: Settings) -> dict:
     version = comfy_version(settings.comfy_url)
     if version is None:
-        if (settings.comfy_dir / "main.py").is_file():
-            return _check("comfyui", "ok", f"installed in {settings.comfy_dir}, not running; jobs start it")
-        fix = "Install ComfyUI next to Studio, or set AIAS_COMFY_DIR to where it is."
+        comfy_dir = resolve_comfy(settings)
+        if (comfy_dir / "main.py").is_file():
+            return _check("comfyui", "ok", f"installed in {comfy_dir}, not running; jobs start it")
+        fix = "Install the engine-comfyui pack in the gallery, or set AIAS_COMFY_DIR to a ComfyUI you have."
         return _check("comfyui", "warn", f"not found in {settings.comfy_dir}", fix)
     if version != VERIFIED_COMFYUI:
         detail = f"running version {version}; the graphs were verified on {VERIFIED_COMFYUI}"

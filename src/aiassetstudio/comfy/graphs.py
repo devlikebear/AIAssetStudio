@@ -365,6 +365,27 @@ def yue2_song(style: str, lyrics: str, seed: int, max_duration: float, prefix: s
     }
 
 
+def _wan_text_nodes(prompt: str) -> dict:
+    """The nodes wan_text_encode() and wan_i2v_lightning() share, built identically so ComfyUI reuses the conditioning."""
+
+    def encode(text: str) -> dict:
+        return {"class_type": "CLIPTextEncode", "inputs": {"clip": ["7", 0], "text": text}}
+
+    loader = {"clip_name": WAN_TE, "type": "wan", "device": "default"}
+    return {"7": {"class_type": "CLIPLoader", "inputs": loader}, "8": encode(prompt), "9": encode("")}
+
+
+def wan_text_encode(prompt: str) -> dict:
+    """Only the text encoding, so it can leave memory before the two video models load. In one prompt the encoder's
+    6.7 GB stayed in RAM beside them: free commit on a 32 GB PC with its default page file reached 0.1 GB, and a clip
+    failed with Windows error 1450 reading its model (2026-11-01). PreviewAny nodes make both results outputs."""
+    previews = {
+        node: {"class_type": "PreviewAny", "inputs": {"source": [source, 0]}}
+        for node, source in (("20", "8"), ("21", "9"))
+    }
+    return _wan_text_nodes(prompt) | previews
+
+
 def wan_i2v_lightning(
     prompt: str,
     image: str,
@@ -388,9 +409,7 @@ def wan_i2v_lightning(
         "4": node("LoraLoaderModelOnly", model=["2", 0], lora_name=WAN_LORA_LOW, strength_model=1.0),
         "5": node("ModelSamplingSD3", model=["3", 0], shift=WAN_SHIFT),
         "6": node("ModelSamplingSD3", model=["4", 0], shift=WAN_SHIFT),
-        "7": node("CLIPLoader", clip_name=WAN_TE, type="wan", device="default"),
-        "8": node("CLIPTextEncode", clip=["7", 0], text=prompt),
-        "9": node("CLIPTextEncode", clip=["7", 0], text=""),
+        **_wan_text_nodes(prompt),
         "10": node("VAELoader", vae_name=WAN_VAE),
         "11": node("LoadImage", image=image),
         "12": node(
