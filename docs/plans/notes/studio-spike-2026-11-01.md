@@ -58,7 +58,8 @@ Studio 로드맵의 근거다. 장편 12화를 12쪽 그림책, 오디오북, �
 | 모델 | 라이선스 | 비고 |
 |---|---|---|
 | Qwen-Image-2.1 | Qwen Research | Non-Commercial은 연구·평가 목적으로만. 생성물 게시 조항 없음. 9조는 명시되지 않은 사용에 별도 라이선스 요청을 요구 |
-| Viggle Turbo LoRA | 원문 미확인 | 기존 기록에는 비상업 |
+| Viggle Turbo LoRA | 원문 미확인 | 기존 기록에는 비상업. 책 공정은 공식 Turbo로 전환해 쓰지 않는다 |
+| Qwen-Image-2.1-Turbo | Qwen Research | 기본 모델과 같은 라이선스 |
 | Qwen3-TTS | Apache 2.0 | 코드와 가중치 모두 |
 | Wan 2.2 | Apache 2.0 | |
 | MiniMax H3 | Community | **대한민국 제외**, 지역 밖의 결과물 사용 불가. 목록에 넣지 않는다 |

@@ -1,4 +1,4 @@
-from aiassetstudio.comfy.graphs import ACE_MODELS, QWEN_MODELS, VIGGLE_LORA, YUE2_MODELS
+from aiassetstudio.comfy.graphs import ACE_MODELS, QWEN_BOOK_MODELS, QWEN_MODELS, VIGGLE_LORA, YUE2_MODELS
 from aiassetstudio.provenance import license_names, license_records, worst_class
 
 
@@ -6,6 +6,12 @@ def test_every_model_file_has_a_record():
     records = license_records(QWEN_MODELS)
     assert {r["file"] for r in records} == set(QWEN_MODELS.values())
     assert all(r["name"] != "unlisted model" for r in records)
+
+
+def test_book_pictures_need_no_lora_of_unread_terms():
+    records = license_records(QWEN_BOOK_MODELS)
+    assert all(r["name"] != "unlisted model" for r in records)
+    assert {r["class"] for r in records} == {"research_only"}
 
 
 def test_lists_of_files_are_flattened():

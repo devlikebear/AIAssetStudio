@@ -9,6 +9,7 @@ from .comfy.graphs import (
     ACE_TE_SMALL,
     ACE_UNET,
     ACE_VAE,
+    QWEN_BOOK_UNET,
     QWEN_TE,
     QWEN_UNET,
     QWEN_VAE,
@@ -33,6 +34,7 @@ _QWEN = ModelLicense("Qwen-Image-2.1", "Qwen Research License", "research_only")
 _ACE = ModelLicense("ACE-Step 1.5", "MIT", "open")
 MODEL_LICENSES: dict[str, ModelLicense] = {
     QWEN_UNET: _QWEN,
+    QWEN_BOOK_UNET: ModelLicense("Qwen-Image-2.1-Turbo", "Qwen Research License", "research_only"),
     QWEN_TE: _QWEN,
     QWEN_VAE: _QWEN,
     # Its license text was not found on 2026-11-01; an older note calls it non-commercial.

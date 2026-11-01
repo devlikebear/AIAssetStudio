@@ -20,6 +20,8 @@ from ..comfy.graphs import (
     ACE_OUTPUT_NODE,
     ACE_SAMPLER,
     ACE_STEPS,
+    QWEN_BOOK_MODELS,
+    QWEN_BOOK_STEPS,
     QWEN_MODELS,
     QWEN_OUTPUT_NODE,
     QWEN_SAMPLER,
@@ -31,6 +33,7 @@ from ..comfy.graphs import (
     Reference,
     RefMode,
     ace_music,
+    qwen_book_page,
     qwen_t2i_turbo,
     qwen_text_encode,
     yue2_song,
@@ -533,7 +536,7 @@ async def _upload_sheets(ctx: RunContext, book: Book, sheets: tuple[Sheet, ...])
 async def run_page_image_job(ctx: RunContext, job: Job) -> None:
     """One full-page picture of a book, or one picture of a place or prop sheet. Same steps as run_image_job, including
     the encode in a prompt of its own, but opaque, in the book's shape, with up to three references. The reference
-    KV cache stays in RAM: spikes/studio/three_refs.py, 20 s a picture with 5.4 GB of VRAM free."""
+    KV cache stays in RAM. Uses the official Turbo checkpoint: 13 s a picture with three references, with no LoRA."""
     params = dict(job.params)
     if params.get("seed") is None:
         params["seed"] = random.randrange(2**31)
@@ -565,9 +568,7 @@ async def run_page_image_job(ctx: RunContext, job: Job) -> None:
     asset_id = new_id()
     prompt_id = str(uuid.uuid4())
     ctx.prompt_ids.append(prompt_id)
-    graph = qwen_t2i_turbo(
-        prompt, seed, f"{project.slug}_{asset_id}", book.width, book.height, ref=refs, cache_cpu=bool(refs)
-    )
+    graph = qwen_book_page(prompt, seed, f"{project.slug}_{asset_id}", book.width, book.height, refs)
     await ctx.comfy.submit(graph, prompt_id=prompt_id)
     entry = await ctx.comfy.wait(prompt_id, timeout=ctx.settings.image_timeout)
     t2 = time.monotonic()
@@ -585,10 +586,10 @@ async def run_page_image_job(ctx: RunContext, job: Job) -> None:
         "description": params["description"],
         "prompt": prompt,
         "seed": seed,
-        "workflow": "qwen_t2i_turbo",
-        "models": QWEN_MODELS,
-        "licenses": license_records(QWEN_MODELS),
-        "steps": QWEN_TURBO_STEPS,
+        "workflow": "qwen_book_page",
+        "models": QWEN_BOOK_MODELS,
+        "licenses": license_records(QWEN_BOOK_MODELS),
+        "steps": QWEN_BOOK_STEPS,
         "sampler": QWEN_SAMPLER,
         "width": size[0],
         "height": size[1],

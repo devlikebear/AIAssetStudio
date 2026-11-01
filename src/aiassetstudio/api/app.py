@@ -531,7 +531,7 @@ def create_app(settings: Settings, comfy_transport: httpx.AsyncBaseTransport | N
                 "count": 1,
                 "seed": body.seed,
             }
-            job_ids.append(s.db.create_job(book.project_id, "page_image", "qwen", params).id)
+            job_ids.append(s.db.create_job(book.project_id, "page_image", "qwen_turbo", params).id)
             s.db.update_page(page.id, status="queued")
         s.queue.notify()
         return JobsCreated(job_ids=job_ids)
@@ -552,7 +552,7 @@ def create_app(settings: Settings, comfy_transport: httpx.AsyncBaseTransport | N
             "count": 1,
             "seed": body.seed,
         }
-        job = s.db.create_job(book.project_id, "page_image", "qwen", params)
+        job = s.db.create_job(book.project_id, "page_image", "qwen_turbo", params)
         s.queue.notify()
         return JobCreated(job_id=job.id)
 

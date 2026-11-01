@@ -56,7 +56,7 @@ _예상 소요: 약 22시간_
   - 파일: `packs/catalog/image-qwen21.json`, `packs/catalog/video-wan22.json`, `comfy/preflight.py`, `tests/test_preflight.py`
   - 내용:
     - `engine: comfy_models`. 파일은 현재 ComfyUI의 `models/<folder>/`에 넣고 `pack_installs.files`에 기록한다. 기존 파일이 있고 sha256이 같으면 내려받지 않고, 삭제 때도 지우지 않는다(`adopted` 표시).
-    - `image-qwen21`: `class: research_only`. 요약에 비상업은 연구·평가 목적이라는 정의를 적는다. 내용은 T1.A.3 결정을 따른다. 공식 Turbo를 넣고, Viggle LoRA와 커스텀 노드는 넣지 않는다. T1.A.3에서 공식 Turbo를 포기했다면 이 팩을 만들지 않고 외부 ComfyUI 전용으로 문서화한다.
+    - `image-qwen21`: `class: research_only`. 요약에 비상업은 연구·평가 목적이라는 정의를 적는다. 공식 Turbo(sha256은 `notes/studio-official-turbo.md`), 텍스트 인코더, VAE를 넣는다. Viggle LoRA와 커스텀 노드는 넣지 않는다.
     - `video-wan22`: `Comfy-Org/Wan-2.2`의 `split_files` 6개, 37.8GB, Apache 2.0.
       - `wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors`, `wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors`
       - `wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors`, `..._low_noise.safetensors`
@@ -64,6 +64,12 @@ _예상 소요: 약 22시간_
     - `preflight.REQUIRED`에 `wan` 계열 추가: `UNETLoader`, `LoraLoaderModelOnly`, `ModelSamplingSD3`, `CLIPLoader`, `CLIPTextEncode`, `VAELoader`, `LoadImage`, `WanImageToVideo`, `KSamplerAdvanced`, `VAEDecode`, `CreateVideo`, `SaveVideo`.
     - `SaveVideo` 필수 입력은 `video, filename_prefix, format`이다(0.37.0 기준).
   - 검증: `uv run pytest tests/test_preflight.py`
+
+- [ ] **T3.B.3** — 스프라이트와 아이콘을 공식 Turbo로 전환
+  - 파일: `comfy/graphs.py`, `jobs/runners.py`, `comfy/preflight.py`, `tests/test_runners.py`, `tests/gpu/`
+  - 이유: 새 PC의 `image-qwen21` 팩에는 Viggle이 없다. 인물 시트도 스프라이트 경로로 만든다.
+  - 내용: `run_image_job`의 그래프를 `qwen_book_page`와 같은 구성으로 바꾼다. 투명 출력은 시험에서 확인했지만 픽셀아트 격자, 참조 이미지, 애니메이션 기준 그림의 회귀는 확인하지 않았다. 기존 GPU 테스트와 LAST LIGHT 프로젝트로 비교한 뒤 바꾼다. 결과가 달라지면 Viggle이 있는 외부 ComfyUI 경로를 유지할지 사용자와 정한다.
+  - 검증: `uv run pytest -m gpu`
 
 ### 작업 그룹 C: 클립
 

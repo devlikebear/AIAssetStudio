@@ -49,10 +49,10 @@ _예상 소요: 약 30시간_
     2. 메모리가 넘치거나 인물이 망가지면 → 인물 참조 2장을 유지하고 장소 시트 설명을 프롬프트에 넣는다(`max_refs = 2`).
   - 검증: 사용자와 결과 합의
 
-- [ ] **T1.A.3** — 공식 Turbo로 Viggle 대체 시험 (GPU, 수동)
+- [x] **T1.A.3** — 공식 Turbo로 Viggle 대체 시험 (GPU, 수동)
   - 파일: `spikes/studio/official_turbo.py`, `docs/plans/notes/studio-official-turbo.md`
   - 이유: 지금 그래프는 커스텀 노드 `viggle_turbo.py`와 라이선스 원문을 확인하지 못한 Viggle LoRA가 필요하다. 이 상태로는 Phase 3의 새 PC 설치가 불가능하다.
-  - 내용: 공식 `Qwen/Qwen-Image-2.1-Turbo`의 int8 파일 `qwen_image_2.1_turbo_int8_convrot.safetensors`(약 7.3GB, 제3자 자료 기준)를 8스텝, CFG 1, `er_sde`, `linear_quadratic`으로 시험한다. 같은 시드와 참조로 Viggle과 비교한다. 다운로드 전 사용자 확인을 받는다. 라이선스는 Qwen Research로 같다.
+  - 내용: 공식 `Qwen/Qwen-Image-2.1-Turbo`의 int8 파일 `qwen_image_2.1_turbo_int8_convrot.safetensors`(6.76GB)를 8스텝, CFG 1, `er_sde`, `linear_quadratic`으로 시험한다. 같은 시드와 참조로 Viggle과 비교한다. 다운로드 전 사용자 확인을 받는다. 라이선스는 Qwen Research로 같다.
   - 결정 규칙
     1. ComfyUI 0.37.0에서 돌고 일관성이 같으면 → 책 그래프를 공식 Turbo로 만들고 Phase 3 `image-qwen21`에 넣는다.
     2. 더 높은 ComfyUI가 필요하면 → 격리 폴더에서 그 버전으로 시험하고, Phase 3 엔진 팩의 고정 버전을 그 버전으로 정한다. 기존 ComfyUI는 업데이트하지 않는다.
@@ -170,6 +170,7 @@ _예상 소요: 약 30시간_
 - 쪽 상태 `queued`는 `release_idle_pages`가 정리한다. 실패, 취소, 재시작을 한곳에서 처리한다.
 - `get_book`의 대기 쪽 미리보기는 채택된 그림만 보낸다.
 - MCP `set_page`에는 `approved`가 없다. 승인은 사람이 갤러리에서만 한다.
+- 공식 Turbo로 전환했다(`notes/studio-official-turbo.md`). 책의 작업 계열은 `qwen_turbo`이고, 기존 스프라이트는 계속 Viggle을 쓴다.
 - 책 작업은 프로젝트의 작업 목록에서 빼고 책 화면에서 본다.
 - PDF 글꼴은 Windows Batang을 기본으로 임베드한다. 공개 배포 전에 글꼴 라이선스를 확인한다.
 

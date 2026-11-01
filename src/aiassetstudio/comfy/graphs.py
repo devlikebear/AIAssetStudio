@@ -17,6 +17,14 @@ QWEN_TURBO_STEPS = 6
 QWEN_TURBO_SIGMAS = "1.0, 0.9375, 0.875, 0.75, 0.5, 0.25"
 QWEN_SAMPLER = "euler"
 
+# The official Qwen-Image-2.1-Turbo, for books: no LoRA or custom node (spikes/studio/official_turbo.py, 2026-11-01:
+# 13 s a 1184x880 picture with three references, against Viggle's 20 s, same faces and places). The schedule is the
+# one saved in the checkpoint; ComfyUI 0.37.0 does not read it from there. CFG is 1: BasicGuider has no negative prompt.
+QWEN_BOOK_UNET = "qwen_image_2.1_turbo_int8_convrot.safetensors"  # diffusion_models
+QWEN_BOOK_MODELS = {"unet": QWEN_BOOK_UNET, "text_encoder": QWEN_TE, "vae": QWEN_VAE}
+QWEN_BOOK_STEPS = 8
+QWEN_BOOK_SIGMAS = "1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0.0"
+
 RefMode = Literal["latent", "vision"]
 
 
@@ -121,6 +129,50 @@ def qwen_t2i_turbo(
         graph["17"] = {
             "class_type": "QwenImage21Cache",
             "inputs": {"model": ["2", 0], "device": "cpu", "dtype": "default"},
+        }
+        graph["10"]["inputs"]["model"] = ["17", 0]
+    return graph
+
+
+def qwen_book_page(
+    prompt: str,
+    seed: int,
+    prefix: str,
+    width: int,
+    height: int,
+    refs: Sequence[Reference] = (),
+) -> dict:
+    """A book's picture with the official Turbo checkpoint. Output: SaveImage node "9". With references the KV cache
+    stays in RAM, as in qwen_t2i_turbo."""
+    graph = {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": QWEN_BOOK_UNET, "weight_dtype": "default"}},
+        "4": _vae_node(),
+        **_qwen_text_nodes(prompt, refs),
+        "6": {"class_type": "EmptyLatentImage", "inputs": {"width": width, "height": height, "batch_size": 1}},
+        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["14", 0], "vae": ["4", 0]}},
+        QWEN_OUTPUT_NODE: {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["8", 0], "filename_prefix": f"aiassetstudio/{prefix}"},
+        },
+        "10": {"class_type": "BasicGuider", "inputs": {"model": ["1", 0], "conditioning": ["5", 0]}},
+        "11": {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}},
+        "12": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": QWEN_SAMPLER}},
+        "13": {"class_type": "ManualSigmas", "inputs": {"sigmas": QWEN_BOOK_SIGMAS}},
+        "14": {
+            "class_type": "SamplerCustomAdvanced",
+            "inputs": {
+                "noise": ["11", 0],
+                "guider": ["10", 0],
+                "sampler": ["12", 0],
+                "sigmas": ["13", 0],
+                "latent_image": ["6", 0],
+            },
+        },
+    }
+    if refs:
+        graph["17"] = {
+            "class_type": "QwenImage21Cache",
+            "inputs": {"model": ["1", 0], "device": "cpu", "dtype": "default"},
         }
         graph["10"]["inputs"]["model"] = ["17", 0]
     return graph

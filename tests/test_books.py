@@ -10,6 +10,7 @@ from PIL import Image
 from pypdf import PdfReader
 
 from aiassetstudio.api.app import create_app
+from aiassetstudio.comfy.graphs import QWEN_BOOK_UNET
 from aiassetstudio.store.db import Database
 
 KOREAN_FONT = Path(r"C:\Windows\Fonts\batang.ttc")
@@ -85,6 +86,15 @@ def test_generation_stores_candidates_and_picks_the_first(client, fake_comfy):
     assert (latents[0]["inputs"]["width"], latents[0]["inputs"]["height"]) == (1184, 880)
     saved = client.get(candidate["files"]["processed"]).content
     assert saved[:4] == b"\x89PNG"
+
+
+def test_book_pictures_use_no_custom_node(client, fake_comfy):
+    generate(client, make_book(client, pages=1))
+    types = {n["class_type"] for g in fake_comfy.graphs for n in g.values()}
+    assert "ManualSigmas" in types
+    assert not {t for t in types if "Viggle" in t}
+    unet = next(n for g in fake_comfy.graphs for n in g.values() if n["class_type"] == "UNETLoader")
+    assert unet["inputs"]["unet_name"] == QWEN_BOOK_UNET
 
 
 def test_generation_sends_references(client, fake_comfy):
