@@ -17,6 +17,7 @@ import { BookView } from './components/BookView'
 import { CopyButton } from './components/CopyButton'
 import { DetailModal } from './components/DetailModal'
 import { JobGroup } from './components/JobGroup'
+import { PacksView } from './components/PacksView'
 import { ProjectInfo } from './components/ProjectInfo'
 import { QueuePanel } from './components/QueuePanel'
 import { StatusBanner } from './components/StatusBanner'
@@ -152,6 +153,9 @@ export default function App() {
           <span className="wordmark-lamp" aria-hidden />
           AI ASSET STUDIO
         </a>
+        <a className="link-btn" href="#/packs">
+          기능 팩
+        </a>
 
         {projects.data && projects.data.length > 0 && (
           <div className="project-picker">
@@ -216,7 +220,9 @@ export default function App() {
 
       <div className="layout">
         <main className="sheet">
-          {route.bookId ? (
+          {route.packs ? (
+            <PacksView packId={route.packId} onError={setActionError} />
+          ) : route.bookId ? (
             <BookView bookId={route.bookId} onError={setActionError} />
           ) : (
             <>

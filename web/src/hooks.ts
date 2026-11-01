@@ -110,17 +110,19 @@ export function useFramePlayer(tags: AnimationTag[] | undefined, range: FrameRan
   return order[step]?.index ?? 0
 }
 
-export type Route = { project?: string; jobId?: string; bookId?: string; info: boolean }
+export type Route = { project?: string; jobId?: string; bookId?: string; packs?: boolean; packId?: string; info: boolean }
 
 function parseHash(hash: string): Route {
   const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent)
   if (parts[0] === 'p' && parts[1]) return { project: parts[1], info: parts[2] === 'info' }
   if (parts[0] === 'jobs' && parts[1]) return { jobId: parts[1], info: false }
   if (parts[0] === 'books' && parts[1]) return { bookId: parts[1], info: false }
+  if (parts[0] === 'packs') return { packs: true, packId: parts[1], info: false }
   return { info: false }
 }
 
-/** Hash routes: #/p/<slug>, #/p/<slug>/info, #/jobs/<id>, #/books/<id>. No server-side routing needed. */
+/** Hash routes: #/p/<slug>, #/p/<slug>/info, #/jobs/<id>, #/books/<id>, #/packs, #/packs/<id>. No server-side routing
+ * needed. */
 export function useHashRoute(): [Route, (hash: string) => void] {
   const [route, setRoute] = useState(() => parseHash(window.location.hash))
   useEffect(() => {

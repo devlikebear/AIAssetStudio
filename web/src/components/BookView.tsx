@@ -1,9 +1,10 @@
 import { useCallback, useState } from 'react'
 
-import { type Asset, exportBook, getBook, listAssets, type Page, updatePage } from '../api'
+import { type Asset, exportBook, getBook, getPack, listAssets, narrateBook, type Page, updatePage } from '../api'
 import { usePoll } from '../hooks'
 import { PageCard } from './PageCard'
 
+const SPEECH_PACK = 'speech-ko'
 const SHEET_KIND = { character: '인물', place: '장소', prop: '소품' }
 const LICENSE_NOTE: Record<string, string> = {
   research_only: '연구·평가 목적으로 제한된 모델로 만든 그림이 있습니다. 공유하거나 판매하기 전에 라이선스를 확인하세요.',
@@ -25,8 +26,8 @@ export function BookView({ bookId, onError }: Props) {
     `exports:${project ?? ''}`,
   )
   const [exporting, setExporting] = useState(false)
-  const [confirming, setConfirming] = useState(false)
-  const [approving, setApproving] = useState(false)
+  const [narrating, setNarrating] = useState(false)
+  const speech = usePoll(() => getPack(SPEECH_PACK), 10000, 'speech-pack')
 
   const change = useCallback(
     async (page: Page, fields: Parameters<typeof updatePage>[1]) => {
@@ -41,24 +42,22 @@ export function BookView({ bookId, onError }: Props) {
     [book, onError],
   )
 
-  // Page by page, as the single button does; a failure stops here and leaves the rest waiting.
-  const approveAll = async (pages: Page[]) => {
-    setConfirming(false)
-    setApproving(true)
+  const startNarration = async () => {
+    setNarrating(true)
     try {
-      for (const page of pages) await updatePage(page.id, { status: 'approved' })
+      await narrateBook(bookId)
       onError(undefined)
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e))
     }
-    setApproving(false)
+    setNarrating(false)
     book.refresh()
   }
 
-  const startExport = async (allowDraft: boolean) => {
+  const startExport = async (allowDraft: boolean, format: 'pdf' | 'mp3' = 'pdf') => {
     setExporting(true)
     try {
-      await exportBook(bookId, allowDraft)
+      await exportBook(bookId, allowDraft, format)
       onError(undefined)
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e))
@@ -74,6 +73,10 @@ export function BookView({ bookId, onError }: Props) {
   const approved = data.counts.approved ?? 0
   const total = data.pages.length
   const waiting = data.pages.filter((page) => page.status === 'candidate' && page.image_asset_id)
+  const spoken = data.narration_counts.approved ?? 0
+  const waitingTakes = data.pages.filter((page) => page.narration_status === 'candidate' && page.narration_asset_id)
+  const toNarrate = data.pages.filter((p) => p.text && (p.narration_status === 'draft' || p.narration_status === 'redo'))
+  const speechReady = speech.data?.status === 'installed'
   const licenseNote = data.license_class ? LICENSE_NOTE[data.license_class] : undefined
   const files = (exports.data ?? []).filter((a: Asset) => a.meta.book_id === bookId).reverse()
 
@@ -84,33 +87,58 @@ export function BookView({ bookId, onError }: Props) {
           프로젝트로
         </a>
         <h1>{data.title}</h1>
-        <p className="book-progress">
-          {total}쪽 중 {approved}쪽 채택
-          {total > 0 && (approved < total ? ` · 남은 ${total - approved}쪽을 모두 채택해야 PDF를 내보낼 수 있습니다` : ' · PDF를 내보낼 수 있습니다')}
-        </p>
-        <div className="page-actions">
-          {confirming ? (
-            <>
-              <button type="button" className="btn btn-primary" onClick={() => approveAll(waiting)}>
-                {waiting.length}쪽 채택 확인
+        <div className="book-tracks">
+          <div className="book-track">
+            <p className="book-progress">
+              그림 {total}쪽 중 {approved}쪽 채택
+              {progressNote(total, approved, 'PDF')}
+            </p>
+            <div className="page-actions">
+              <ApproveAll
+                pages={waiting}
+                fields={{ status: 'approved' }}
+                label="그림"
+                onDone={book.refresh}
+                onError={onError}
+              />
+              <button type="button" className="btn btn-primary" disabled={exporting || total === 0 || approved < total} onClick={() => startExport(false)}>
+                PDF 내보내기
               </button>
-              <button type="button" className="btn btn-ghost" onClick={() => setConfirming(false)}>
-                취소
+              <button type="button" className="btn btn-ghost" disabled={exporting || total === 0} onClick={() => startExport(true)}>
+                검수용 PDF
               </button>
-            </>
-          ) : (
-            waiting.length > 0 && (
-              <button type="button" className="btn btn-ghost" disabled={approving} onClick={() => setConfirming(true)}>
-                검수 대기 {waiting.length}쪽 모두 채택
+            </div>
+          </div>
+          <div className="book-track">
+            <p className="book-progress">
+              낭독 {total}쪽 중 {spoken}쪽 채택
+              {progressNote(total, spoken, 'MP3')}
+            </p>
+            <div className="page-actions">
+              {speechReady ? (
+                <button type="button" className="btn btn-ghost" disabled={narrating || toNarrate.length === 0} onClick={startNarration}>
+                  낭독 {toNarrate.length}쪽 만들기
+                </button>
+              ) : (
+                <a className="btn btn-ghost" href={`#/packs/${SPEECH_PACK}`}>
+                  음성 팩 설치
+                </a>
+              )}
+              <ApproveAll
+                pages={waitingTakes}
+                fields={{ narration_status: 'approved' }}
+                label="낭독"
+                onDone={book.refresh}
+                onError={onError}
+              />
+              <button type="button" className="btn btn-primary" disabled={exporting || total === 0 || spoken < total} onClick={() => startExport(false, 'mp3')}>
+                MP3 내보내기
               </button>
-            )
-          )}
-          <button type="button" className="btn btn-primary" disabled={exporting || total === 0 || approved < total} onClick={() => startExport(false)}>
-            PDF 내보내기
-          </button>
-          <button type="button" className="btn btn-ghost" disabled={exporting || total === 0} onClick={() => startExport(true)}>
-            검수용 PDF
-          </button>
+              <button type="button" className="btn btn-ghost" disabled={exporting || !data.pages.some((p) => p.narration_asset_id)} onClick={() => startExport(true, 'mp3')}>
+                검수용 MP3
+              </button>
+            </div>
+          </div>
         </div>
       </header>
 
@@ -127,8 +155,8 @@ export function BookView({ bookId, onError }: Props) {
         <ul className="book-exports" aria-label="내보낸 파일">
           {files.slice(0, 3).map((file) => (
             <li key={file.id}>
-              <a href={file.files.pdf} target="_blank" rel="noreferrer">
-                PDF {new Date(file.created_at).toLocaleString('ko-KR')}
+              <a href={file.files.pdf ?? file.files.mp3} target="_blank" rel="noreferrer">
+                {file.files.pdf ? 'PDF' : 'MP3'} {new Date(file.created_at).toLocaleString('ko-KR')}
               </a>
               {/* License warnings are in the banner above; what remains is about the layout. */}
               {(file.meta.warnings as string[] | undefined)
@@ -161,5 +189,57 @@ export function BookView({ bookId, onError }: Props) {
         ))}
       </div>
     </section>
+  )
+}
+
+function progressNote(total: number, approved: number, format: string): string {
+  if (total === 0) return ''
+  return approved < total ? ` · 남은 ${total - approved}쪽을 모두 채택해야 ${format}를 내보낼 수 있습니다` : ` · ${format}를 내보낼 수 있습니다`
+}
+
+interface ApproveAllProps {
+  pages: Page[]
+  fields: Parameters<typeof updatePage>[1]
+  label: string
+  onDone: () => void
+  onError: (message: string | undefined) => void
+}
+
+/** Approve every page waiting for review, after a second click. Pages with a redo request stay as they are. */
+function ApproveAll({ pages, fields, label, onDone, onError }: ApproveAllProps) {
+  const [confirming, setConfirming] = useState(false)
+  const [approving, setApproving] = useState(false)
+
+  // Page by page, as the single button does; a failure stops here and leaves the rest waiting.
+  const approve = async () => {
+    setConfirming(false)
+    setApproving(true)
+    try {
+      for (const page of pages) await updatePage(page.id, fields)
+      onError(undefined)
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e))
+    }
+    setApproving(false)
+    onDone()
+  }
+
+  if (pages.length === 0) return null
+  if (confirming) {
+    return (
+      <>
+        <button type="button" className="btn btn-primary" onClick={approve}>
+          {label} {pages.length}쪽 채택 확인
+        </button>
+        <button type="button" className="btn btn-ghost" onClick={() => setConfirming(false)}>
+          취소
+        </button>
+      </>
+    )
+  }
+  return (
+    <button type="button" className="btn btn-ghost" disabled={approving} onClick={() => setConfirming(true)}>
+      {label} 검수 대기 {pages.length}쪽 모두 채택
+    </button>
   )
 }

@@ -1411,9 +1411,113 @@ dialog::backdrop {
   font-size: 13px;
 }
 
-.book-head .page-actions {
-  grid-column: 2;
-  grid-row: 2 / span 2;
+.book-tracks {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.book-track {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.book-track .page-actions {
+  margin-top: 0;
+}
+
+.page-audio {
+  width: 100%;
+}
+
+.packs {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.pack-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+}
+
+.pack-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pack-head h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.pack-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.pack-facts dt {
+  color: var(--muted);
+}
+
+.pack-facts dd {
+  margin: 0;
+}
+
+.pack-licenses {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 12px 0;
+  list-style: none;
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.pack-licenses label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: 12px;
+}
+
+.pack-licenses p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.pack-stage,
+.pack-error {
+  margin: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.pack-log pre {
+  max-height: 240px;
+  margin: 8px 0 0;
+  overflow: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .book-links {
@@ -1621,11 +1725,6 @@ dialog::backdrop {
 @media (max-width: 640px) {
   .book-head {
     grid-template-columns: 1fr;
-  }
-
-  .book-head .page-actions {
-    grid-column: 1;
-    grid-row: auto;
   }
 
   .page-grid {

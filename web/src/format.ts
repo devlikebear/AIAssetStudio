@@ -62,6 +62,7 @@ export const KIND_LABEL: Record<string, string> = {
   bgm: 'BGM',
   animation: '애니메이션',
   page_image: '쪽 그림',
+  narration: '낭독',
   book_export: '책 내보내기',
 }
 
@@ -75,7 +76,7 @@ export const PAGE_STATUS_LABEL: Record<PageStatus, string> = {
 
 /** A book's jobs are reviewed in the book, page by page, not in the project's job list. */
 export function isBookJob(job: Pick<Job, 'kind'>): boolean {
-  return job.kind === 'page_image' || job.kind === 'book_export'
+  return job.kind === 'page_image' || job.kind === 'narration' || job.kind === 'book_export'
 }
 
 /** What a job makes: an image kind (sprite, icon) from its params, or the job kind (bgm). */
@@ -108,6 +109,10 @@ const STAGE_LABEL: Record<string, string> = {
   'uploading references': '참고 이미지 올리는 중',
   generating: '생성 중',
   'laying out': '조판 중',
+  'starting the speech model': '음성 모델 켜는 중',
+  speaking: '낭독 중',
+  'joining pages': '쪽 잇는 중',
+  encoding: '인코딩 중',
   'freeing memory': '메모리 비우는 중',
   // animations (sprite-gen + codex)
   preparing: 'sprite-gen 준비 중',
