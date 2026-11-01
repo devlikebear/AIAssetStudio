@@ -174,7 +174,7 @@ def write_wav(path: str | Path, y: np.ndarray, sr: int) -> None:
 
 def encode_ogg(wav_path: str | Path, ogg_path: str | Path, ffmpeg: str = "ffmpeg", quality: int = OGG_QUALITY) -> None:
     """Vorbis OGG from a WAV. Some engines leave a tiny gap when an OGG loops; the WAV loops seamlessly."""
-    _ffmpeg(ffmpeg, wav_path, ["-c:a", "libvorbis", "-q:a", str(quality)], ogg_path)
+    run_ffmpeg(ffmpeg, ["-i", str(wav_path), "-c:a", "libvorbis", "-q:a", str(quality), str(ogg_path)])
 
 
 def concat_with_gaps(paths: Sequence[Path], out_path: Path, gap_s: float) -> list[tuple[float, float]]:
@@ -197,20 +197,25 @@ def concat_with_gaps(paths: Sequence[Path], out_path: Path, gap_s: float) -> lis
 
 
 def encode_mp3(wav_path: str | Path, mp3_path: str | Path, ffmpeg: str = "ffmpeg") -> None:
-    _ffmpeg(
-        ffmpeg,
-        wav_path,
-        ["-af", MP3_LOUDNESS, "-ar", str(MP3_RATE), "-c:a", "libmp3lame", "-b:a", MP3_BITRATE],
-        mp3_path,
-    )
+    options = ["-af", MP3_LOUDNESS, "-ar", str(MP3_RATE), "-c:a", "libmp3lame", "-b:a", MP3_BITRATE]
+    run_ffmpeg(ffmpeg, ["-i", str(wav_path), *options, str(mp3_path)])
 
 
-def _ffmpeg(ffmpeg: str, source: str | Path, options: list[str], target: str | Path) -> None:
-    command = [ffmpeg, "-y", "-loglevel", "error", "-i", str(source), *options, str(target)]
+def run_ffmpeg(ffmpeg: str, args: list[str], cwd: Path | None = None) -> None:
+    command = [ffmpeg, "-y", "-loglevel", "error", *args]
     # No console window: the backend runs detached, and a console program started from it would open one.
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
-        done = subprocess.run(command, capture_output=True, text=True, creationflags=flags, check=False)
+        done = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=cwd,
+            creationflags=flags,
+            check=False,
+        )
     except FileNotFoundError as e:
         raise AudioEncodeError(f"ffmpeg not found ({ffmpeg}); install it or set AIAS_FFMPEG") from e
     if done.returncode != 0:

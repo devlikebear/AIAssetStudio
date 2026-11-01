@@ -17,6 +17,12 @@ from .graphs import (
     QWEN_UNET,
     QWEN_VAE,
     VIGGLE_LORA,
+    WAN_LORA_HIGH,
+    WAN_LORA_LOW,
+    WAN_TE,
+    WAN_UNET_HIGH,
+    WAN_UNET_LOW,
+    WAN_VAE,
     YUE2_CKPT,
 )
 
@@ -122,6 +128,28 @@ REQUIRED: dict[str, Requirement] = {
             "SaveAudio",
         ),
         models={"checkpoints": (YUE2_CKPT,)},
+    ),
+    "wan": Requirement(
+        nodes=(
+            "UNETLoader",
+            "LoraLoaderModelOnly",
+            "ModelSamplingSD3",
+            "CLIPLoader",
+            "CLIPTextEncode",
+            "VAELoader",
+            "LoadImage",
+            "WanImageToVideo",
+            "KSamplerAdvanced",
+            "VAEDecode",
+            "CreateVideo",
+            "SaveVideo",
+        ),
+        models={
+            "diffusion_models": (WAN_UNET_HIGH, WAN_UNET_LOW),
+            "loras": (WAN_LORA_HIGH, WAN_LORA_LOW),
+            "text_encoders": (WAN_TE,),
+            "vae": (WAN_VAE,),
+        },
     ),
 }
 

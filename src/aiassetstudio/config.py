@@ -29,6 +29,8 @@ class Settings:
     book_font: str = r"C:\Windows\Fonts\batang.ttc"  # the text of exported books; a .ttf or a .ttc, first face
     tts_port: int = 8766  # the speech pack's server, on this PC only
     narration_timeout: float = 300  # seconds per page; a 26 s page took 50 s
+    clip_timeout: float = 900  # seconds per clip; one took about 190 s
+    video_timeout: float = 1800  # seconds to assemble a book's video, which also bounds its PDF and MP3
 
 
 # field -> (environment variable, converter)
@@ -49,6 +51,8 @@ _ENV = {
     "book_font": ("AIAS_BOOK_FONT", str),
     "tts_port": ("AIAS_TTS_PORT", int),
     "narration_timeout": ("AIAS_NARRATION_TIMEOUT", float),
+    "clip_timeout": ("AIAS_CLIP_TIMEOUT", float),
+    "video_timeout": ("AIAS_VIDEO_TIMEOUT", float),
 }
 
 

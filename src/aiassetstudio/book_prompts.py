@@ -61,3 +61,13 @@ def sheet_prompt(style: str, sheet: Sheet) -> str:
     """A place or prop picture. A place must be empty: whatever it holds comes back in every page that uses it."""
     extra = EMPTY_SCENE if sheet.kind == "place" else ""
     return " ".join(part for part in (sheet.description.strip(), extra, style.strip(), PAGE_RULES) if part)
+
+
+# At CFG 1 a negative prompt does nothing, so these limits are stated in the prompt (2026-11-01 trial).
+STAY_IN_PLACE = "Everyone stays in exactly the same place facing the same way. Nobody walks, leaves or turns around. "
+STAY_IN_PLACE += "Only small natural movement."
+KEEP_STYLE = "The painted style stays the same, gentle natural motion, static composition."
+
+
+def clip_prompt(style: str, motion: str, still: bool) -> str:
+    return " ".join(part for part in (motion, STAY_IN_PLACE if still else "", style, KEEP_STYLE) if part)

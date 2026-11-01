@@ -144,6 +144,8 @@ class JobQueue:
             "bgm": self.settings.bgm_timeout,
             "animation": self.settings.animation_timeout,
             "narration": self.settings.narration_timeout,
+            "clip": self.settings.clip_timeout,
+            "book_export": self.settings.video_timeout,
         }
         timeout = timeouts.get(job.kind, self.settings.image_timeout)
         self.db.update_job(job.id, status="running", started_at=now(), stage="starting")

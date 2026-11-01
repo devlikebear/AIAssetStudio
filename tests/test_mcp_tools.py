@@ -150,6 +150,8 @@ async def test_server_registers_every_tool():
         "export_book",
         "generate_narration",
         "list_packs",
+        "generate_clips",
+        "set_page_motion",
     }
     reference = listed["update_project"].input_schema["properties"]["reference_image"]
     assert "must be an absolute path; it is copied into the studio" in reference["description"]
@@ -235,7 +237,7 @@ async def test_bgm_tool_description():
         " ".join(listed["generate_bgm"].description.split())
     )
     kinds = listed["list_assets"].input_schema["properties"]["kind"]["anyOf"][0]["enum"]
-    assert kinds == ["sprite", "icon", "bgm", "animation", "page_image", "narration", "book_export"]
+    assert kinds == ["sprite", "icon", "bgm", "animation", "page_image", "narration", "clip", "book_export"]
 
 
 async def test_animation_tool_description():

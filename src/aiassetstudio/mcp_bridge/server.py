@@ -45,7 +45,15 @@ For an audiobook of that book: list_packs shows whether the speech pack is insta
 person to agree to its license in the gallery; it installs there or with `aiassetstudio pack install <id>`. You cannot
 agree or install from here. set_book_terms for names a narrator misreads -> generate_narration -> ask the user to listen
 in the gallery; only they approve -> get_book shows their notes -> change the text or terms, generate_narration(pages)
--> export_book(format="mp3")."""
+-> export_book(format="mp3").
+
+For a moving picture book of that book: set_page_motion on each page with its picture approved -> generate_clips ->
+look at each clip's last frame, then ask the user to play them in the gallery and pick how each page is shown -> their
+approval, picture and narration -> export_book(format="mp4"). Writing motion_prompt, in English: one small movement
+(water, wind, a hand), never a story. A negative prompt does nothing here, so keep motion_still on unless someone must
+really move. Clips lose small traits and let people drift late in their 5 s: if a small trait matters to the story on
+that page, set clip_method "still", which shows the approved picture slowly zooming. A clip plays once and its last
+frame holds for the rest of the page, so that frame must be good; if only the start is good, use "head"."""
 
 mcp = MCPServer("aiassetstudio", instructions=INSTRUCTIONS)
 _api: StudioApi | None = None
@@ -244,7 +252,7 @@ async def get_job(
 async def list_assets(
     project: Slug,
     kind: Annotated[
-        Literal["sprite", "icon", "bgm", "animation", "page_image", "narration", "book_export"] | None,
+        Literal["sprite", "icon", "bgm", "animation", "page_image", "narration", "clip", "book_export"] | None,
         Field(description="Only this kind"),
     ] = None,
     status: Annotated[
@@ -407,11 +415,14 @@ async def check_book_sources(
 async def export_book(
     book_id: BookId,
     allow_draft: Annotated[bool, Field(description="Include pages nobody approved; for a proof")] = False,
-    format: Annotated[Literal["pdf", "mp3"], Field(description="pdf: the book; mp3: its narration")] = "pdf",
+    format: Annotated[
+        Literal["pdf", "mp3", "mp4"],
+        Field(description="pdf: the book; mp3: its narration; mp4: pictures or clips with narration and subtitles"),
+    ] = "pdf",
 ) -> str:
-    """Queue the book's PDF (real text under each picture, a cover and a colophon naming the models) or its narration
-    as one MP3. Needs every page's picture, or narration, approved unless allow_draft. Call get_job for the result, and
-    pass on any license warning to the user."""
+    """Queue the book's PDF (real text under each picture, a cover and a colophon naming the models), its narration as
+    one MP3, or its video. Needs every page's picture, narration, or narration and way of showing approved unless
+    allow_draft. Call get_job for the result, and pass on any license warning to the user."""
     return await _call(tools.export_book, book_id, allow_draft, format)
 
 
@@ -424,6 +435,38 @@ async def generate_narration(
     """Queue a narrator reading each page's text, with the book's terms applied. Needs the speech pack. A new take joins
     the page's takes; the choice already made stays. You cannot hear audio: ask the user to listen in the gallery."""
     return await _call(tools.generate_narration, book_id, pages, seed)
+
+
+@mcp.tool(structured_output=False)
+async def set_page_motion(
+    page_id: Annotated[str, Field(description="The page's id, from the book")],
+    motion_prompt: Annotated[str | None, Field(description="What moves in the clip, in English")] = None,
+    motion_still: Annotated[
+        bool | None, Field(description="Tell the people to stay where they are; on by default")
+    ] = None,
+    clip_method: Annotated[
+        Literal["full", "head", "still"] | None,
+        Field(description="full: the whole clip; head: its first seconds; still: no clip, the picture zooming slowly"),
+    ] = None,
+    clip_head_s: Annotated[float | None, Field(ge=0.5, le=5, description="Seconds of the clip that head uses")] = None,
+) -> str:
+    """Set what moves on a page and how the page is shown in the video. Changing the motion makes its clip out of date.
+    The person approves it in the gallery."""
+    return await _call(tools.set_page_motion, page_id, motion_prompt, motion_still, clip_method, clip_head_s)
+
+
+@mcp.tool(structured_output=False)
+async def generate_clips(
+    book_id: BookId,
+    pages: Annotated[
+        list[int] | None,
+        Field(description="Page numbers; omit for every page in draft or redo with an approved picture and a motion"),
+    ] = None,
+    seed: Annotated[int | None, Field(ge=0, description="Random per page if omitted")] = None,
+) -> str:
+    """Queue a 5 s clip from each page's approved picture, about 3 minutes each. A new clip joins the page's clips; the
+    choice already made stays. You cannot play video: look at the last frames, and ask the user to review."""
+    return await _call(tools.generate_clips, book_id, pages, seed)
 
 
 @mcp.tool(structured_output=False)

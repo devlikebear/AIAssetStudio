@@ -25,6 +25,27 @@ QWEN_BOOK_MODELS = {"unet": QWEN_BOOK_UNET, "text_encoder": QWEN_TE, "vae": QWEN
 QWEN_BOOK_STEPS = 8
 QWEN_BOOK_SIGMAS = "1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0.0"
 
+# Wan 2.2 14B image to video with the 4-step Lightning LoRAs (spikes/studio/render_video.py, 2026-11-01): 832x624, 81
+# frames at 16 fps, about 190 s a clip, free RAM down to 1.8 GB. CFG is 1, so a negative prompt has no effect: limits on
+# the motion must be in the prompt itself.
+WAN_UNET_HIGH = "wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors"  # diffusion_models
+WAN_UNET_LOW = "wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors"  # diffusion_models
+WAN_LORA_HIGH = "wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors"  # loras
+WAN_LORA_LOW = "wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors"  # loras
+WAN_TE = "umt5_xxl_fp8_e4m3fn_scaled.safetensors"  # text_encoders
+WAN_VAE = "wan_2.1_vae.safetensors"  # vae
+WAN_MODELS = {
+    "unet": (WAN_UNET_HIGH, WAN_UNET_LOW),
+    "lora": (WAN_LORA_HIGH, WAN_LORA_LOW),
+    "text_encoder": WAN_TE,
+    "vae": WAN_VAE,
+}
+WAN_OUTPUT_NODE = "17"
+WAN_STEPS = 4
+WAN_SWITCH_STEP = 2  # the high-noise model takes the first steps, the low-noise model the rest
+WAN_SHIFT = 5.0
+WAN_WIDTH, WAN_HEIGHT, WAN_FRAMES, WAN_FPS = 832, 624, 81, 16
+
 RefMode = Literal["latent", "vision"]
 
 
@@ -341,4 +362,71 @@ def yue2_song(style: str, lyrics: str, seed: int, max_duration: float, prefix: s
             "class_type": "SaveAudio",
             "inputs": {"audio": ["9", 0], "filename_prefix": f"aiassetstudio/{prefix}"},
         },
+    }
+
+
+def wan_i2v_lightning(
+    prompt: str,
+    image: str,
+    seed: int,
+    prefix: str,
+    width: int = WAN_WIDTH,
+    height: int = WAN_HEIGHT,
+    frames: int = WAN_FRAMES,
+) -> dict:
+    """A clip that starts from `image` (a LoadImage value). The negative prompt must be wired but is ignored at CFG 1."""
+
+    def node(class_type: str, **inputs) -> dict:
+        return {"class_type": class_type, "inputs": inputs}
+
+    sampler = {"steps": WAN_STEPS, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "noise_seed": seed}
+    condition = {"positive": ["12", 0], "negative": ["12", 1]}
+    return {
+        "1": node("UNETLoader", unet_name=WAN_UNET_HIGH, weight_dtype="default"),
+        "2": node("UNETLoader", unet_name=WAN_UNET_LOW, weight_dtype="default"),
+        "3": node("LoraLoaderModelOnly", model=["1", 0], lora_name=WAN_LORA_HIGH, strength_model=1.0),
+        "4": node("LoraLoaderModelOnly", model=["2", 0], lora_name=WAN_LORA_LOW, strength_model=1.0),
+        "5": node("ModelSamplingSD3", model=["3", 0], shift=WAN_SHIFT),
+        "6": node("ModelSamplingSD3", model=["4", 0], shift=WAN_SHIFT),
+        "7": node("CLIPLoader", clip_name=WAN_TE, type="wan", device="default"),
+        "8": node("CLIPTextEncode", clip=["7", 0], text=prompt),
+        "9": node("CLIPTextEncode", clip=["7", 0], text=""),
+        "10": node("VAELoader", vae_name=WAN_VAE),
+        "11": node("LoadImage", image=image),
+        "12": node(
+            "WanImageToVideo",
+            positive=["8", 0],
+            negative=["9", 0],
+            vae=["10", 0],
+            start_image=["11", 0],
+            width=width,
+            height=height,
+            length=frames,
+            batch_size=1,
+        ),
+        "13": node(
+            "KSamplerAdvanced",
+            model=["5", 0],
+            add_noise="enable",
+            latent_image=["12", 2],
+            start_at_step=0,
+            end_at_step=WAN_SWITCH_STEP,
+            return_with_leftover_noise="enable",
+            **sampler,
+            **condition,
+        ),
+        "14": node(
+            "KSamplerAdvanced",
+            model=["6", 0],
+            add_noise="disable",
+            latent_image=["13", 0],
+            start_at_step=WAN_SWITCH_STEP,
+            end_at_step=10000,
+            return_with_leftover_noise="disable",
+            **sampler,
+            **condition,
+        ),
+        "15": node("VAEDecode", samples=["14", 0], vae=["10", 0]),
+        "16": node("CreateVideo", images=["15", 0], fps=float(WAN_FPS)),
+        WAN_OUTPUT_NODE: node("SaveVideo", video=["16", 0], filename_prefix=prefix, format="mp4"),
     }

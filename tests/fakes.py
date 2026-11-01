@@ -5,10 +5,14 @@ errors come back as status_str "error" with an execution_error (or execution_int
 and POST /interrupt only stops the prompt that is currently running.
 """
 
+import functools
 import io
 import json
 import re
+import subprocess
+import tempfile
 import uuid
+from pathlib import Path
 
 import httpx
 import numpy as np
@@ -71,6 +75,16 @@ def fake_flac(seconds: float, bpm: float, silence_s: float = 4.0, sr: int = 2205
     return buf.getvalue()
 
 
+@functools.lru_cache
+def fake_mp4(frames: int = 81) -> bytes:
+    """A real small H.264 clip: the app reads its frames with ffmpeg."""
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "clip.mp4"
+        source = ["-f", "lavfi", "-i", "testsrc=size=208x156:rate=16", "-frames:v", str(frames), "-pix_fmt", "yuv420p"]
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *source, str(path)], check=True)
+        return path.read_bytes()
+
+
 class FakeComfy:
     def __init__(
         self,
@@ -124,6 +138,8 @@ class FakeComfy:
                 self.views.append(dict(request.url.params))
                 if (name := request.url.params.get("filename", "")) in self.audio:
                     return httpx.Response(200, content=self.audio[name], headers={"Content-Type": "audio/flac"})
+                if name.endswith(".mp4"):
+                    return httpx.Response(200, content=fake_mp4(), headers={"Content-Type": "video/mp4"})
                 return httpx.Response(200, content=self.png, headers={"Content-Type": "image/png"})
         elif method == "POST":
             if path == "/upload/image":
@@ -202,6 +218,14 @@ class FakeComfy:
                         "type": "output",
                     }
                     outputs[node_id] = {"images": [image]}
+                if node["class_type"] == "SaveVideo":
+                    subfolder, _, name = node["inputs"]["filename_prefix"].rpartition("/")
+                    video = {
+                        "filename": f"{name}_{len(self.prompts):05}_.mp4",
+                        "subfolder": subfolder,
+                        "type": "output",
+                    }
+                    outputs[node_id] = {"images": [video], "animated": [True]}
                 if node["class_type"] == "SaveAudio":
                     subfolder, _, name = node["inputs"]["filename_prefix"].rpartition("/")
                     filename = f"{name}_{len(self.prompts):05}_.flac"

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .models import Asset, Book, Job, PackConsent, PackInstall, Page, Project, Sheet, Term
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _BOOK_TABLES = """
 CREATE TABLE books (
@@ -85,6 +85,16 @@ ALTER TABLE pages ADD COLUMN narration_status TEXT NOT NULL DEFAULT 'draft';
 ALTER TABLE pages ADD COLUMN narration_note TEXT;
 """
 
+_CLIP_COLUMNS = """
+ALTER TABLE pages ADD COLUMN motion_prompt TEXT NOT NULL DEFAULT '';
+ALTER TABLE pages ADD COLUMN motion_still INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE pages ADD COLUMN clip_asset_id TEXT;
+ALTER TABLE pages ADD COLUMN clip_status TEXT NOT NULL DEFAULT 'draft';
+ALTER TABLE pages ADD COLUMN clip_note TEXT;
+ALTER TABLE pages ADD COLUMN clip_method TEXT NOT NULL DEFAULT 'full';
+ALTER TABLE pages ADD COLUMN clip_head_s REAL NOT NULL DEFAULT 2.0;
+"""
+
 _SCHEMA = (
     """
 CREATE TABLE projects (
@@ -137,6 +147,7 @@ CREATE INDEX assets_project ON assets(project_id, kind, status);
     + _BOOK_TABLES
     + _PACK_TABLES
     + _NARRATION_COLUMNS
+    + _CLIP_COLUMNS
 )
 
 # version -> the SQL that takes a database of that version one step up. SQLite adds a NOT NULL column with a
@@ -145,6 +156,7 @@ _UPGRADES = {
     1: "ALTER TABLE projects ADD COLUMN animation_cloud INTEGER NOT NULL DEFAULT 0;",
     2: _BOOK_TABLES,
     3: _PACK_TABLES + _NARRATION_COLUMNS,
+    4: _CLIP_COLUMNS,
 }
 
 PROJECT_FIELDS = (
@@ -162,7 +174,21 @@ PROJECT_FIELDS = (
 )
 JOB_FIELDS = ("params", "status", "stage", "error", "timings", "started_at", "finished_at")
 PAGE_FIELDS = ("text", "image_prompt", "people", "props", "place", "source_refs")
-PAGE_STATE_FIELDS = ("status", "note", "image_asset_id", "narration_status", "narration_note", "narration_asset_id")
+PAGE_STATE_FIELDS = (
+    "status",
+    "note",
+    "image_asset_id",
+    "narration_status",
+    "narration_note",
+    "narration_asset_id",
+    "motion_prompt",
+    "motion_still",
+    "clip_asset_id",
+    "clip_status",
+    "clip_note",
+    "clip_method",
+    "clip_head_s",
+)
 # A change to one of these makes the chosen picture out of date. `text` is not one: the picture still fits.
 PAGE_PICTURE_FIELDS = ("image_prompt", "people", "props", "place")
 PACK_INSTALL_FIELDS = ("version", "status", "stage", "error", "files", "installed_at")
@@ -454,7 +480,12 @@ class Database:
                 if not changes:
                     continue
                 if any(f in changes for f in PAGE_PICTURE_FIELDS):
-                    changes |= {"status": "draft", "image_asset_id": None}
+                    changes |= {
+                        "status": "draft",
+                        "image_asset_id": None,
+                        "clip_status": "draft",
+                        "clip_asset_id": None,
+                    }
                 if "text" in changes:
                     changes |= {"narration_status": "draft", "narration_asset_id": None}
                 changes["updated_at"] = ts
@@ -469,7 +500,7 @@ class Database:
         if fields:
             fields["updated_at"] = now()
             sets = ", ".join(f"{k} = ?" for k in fields)
-            self._write(f"UPDATE pages SET {sets} WHERE id = ?", [*fields.values(), page_id])
+            self._write(f"UPDATE pages SET {sets} WHERE id = ?", [*(_encode(k, v) for k, v in fields.items()), page_id])
         return self.get_page(page_id)
 
     def release_idle_pages(self, book_id: str | None = None) -> None:
@@ -483,16 +514,17 @@ class Database:
             args,
         )
 
-    def release_idle_narration(self, book_id: str | None = None) -> None:
-        """The same for narration: pages queued for a narration job that is gone."""
+    def release_idle_media(self, book_id: str | None = None) -> None:
+        """The same for narration and clips: pages queued for a job that is gone."""
         clause, args = (" AND book_id = ?", (now(), book_id)) if book_id is not None else ("", (now(),))
-        self._write(
-            "UPDATE pages SET narration_status = CASE WHEN narration_asset_id IS NULL THEN 'draft' ELSE 'candidate' END,"
-            " updated_at = ? WHERE narration_status = 'queued' AND id NOT IN ("
-            "SELECT json_extract(params, '$.page_id') FROM jobs WHERE kind = 'narration'"
-            " AND status IN ('queued', 'running'))" + clause,
-            args,
-        )
+        for media in ("narration", "clip"):
+            self._write(
+                f"UPDATE pages SET {media}_status = CASE WHEN {media}_asset_id IS NULL THEN 'draft' ELSE 'candidate' END,"
+                f" updated_at = ? WHERE {media}_status = 'queued' AND id NOT IN ("
+                f"SELECT json_extract(params, '$.page_id') FROM jobs WHERE kind = '{media}'"
+                " AND status IN ('queued', 'running'))" + clause,
+                args,
+            )
 
     def list_sheets(self, book_id: str) -> list[Sheet]:
         rows = self._all("SELECT * FROM sheets WHERE book_id = ? ORDER BY kind, name", (book_id,))

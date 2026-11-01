@@ -13,6 +13,7 @@ FAMILY_LABELS = {
     "qwen_turbo": "book image models (Qwen-Image-2.1-Turbo)",
     "ace": "music models (ACE-Step)",
     "yue2": "vocal models (YuE2)",
+    "wan": "video models (Wan 2.2)",
 }
 
 
@@ -127,6 +128,12 @@ def _narration_text(api: StudioApi, a: dict) -> str:
     return "\n".join(lines)
 
 
+def _clip_text(a: dict) -> str:
+    m = a["meta"]
+    line = f"asset {a['id']} seed={a['seed']} status={a['status']}: page {m['page_number']} clip, last frame:"
+    return "\n".join([line, *(f"  warning: {w}" for w in m.get("warnings", []))])
+
+
 def _book_export_text(a: dict) -> str:
     m = a["meta"]
     lines = [f"asset {a['id']} book_export: {len(m.get('pages', []))} pages as {m.get('format', 'pdf').upper()}"]
@@ -140,11 +147,14 @@ def _page_line(p: dict) -> str:
     refs = ", ".join(r.get("label") or r["node_id"] for r in p["source_refs"])
     line = f"page {p['number']} [{p['status']}] {len(p['candidates'])} pictures, chosen {p['image_asset_id'] or 'none'}"
     line += f"; narration [{p['narration_status']}] {len(p['narration_candidates'])} takes"
+    line += f"; clip [{p['clip_status']}] {len(p['clip_candidates'])} made, shown as {p['clip_method']}"
     line += f"; rests on {refs}" if refs else "; NO SOURCE RECORDED"
     if p["note"]:
         line += f"\n  the person asks: {p['note']}"
     if p["narration_note"]:
         line += f"\n  the person asks of the narration: {p['narration_note']}"
+    if p["clip_note"]:
+        line += f"\n  the person asks of the clip: {p['clip_note']}"
     return line
 
 
@@ -153,7 +163,8 @@ def _book_text(api: StudioApi, book: dict) -> str:
     spoken = book["narration_counts"].get("approved", 0)
     total = len(book["pages"])
     head = f"book {book['id']} [{book['project']}] {book['title']}: {done}/{total} pages approved"
-    lines = [f"{head}, {spoken}/{total} narrations approved"]
+    shown = book["clip_counts"].get("approved", 0)
+    lines = [f"{head}, {spoken}/{total} narrations approved, {shown}/{total} ways to show approved"]
     if book["license_class"] in WARN_CLASSES:
         lines.append(f"  license of the chosen pictures: {book['license_class']}; tell the user before they share it")
     lines += [
@@ -279,6 +290,8 @@ async def get_job(api: StudioApi, job_id: str, wait_seconds: int = 30) -> list[s
             continue
         if a["kind"] == "animation":
             out.append(_animation_text(a))
+        elif a["kind"] == "clip":
+            out.append(_clip_text(a))
         elif a["kind"] == "book_export":
             out.append(_book_export_text(a))
         else:
@@ -302,6 +315,12 @@ async def get_job(api: StudioApi, job_id: str, wait_seconds: int = 30) -> list[s
         out.append(
             "You cannot hear this. Ask the user to listen in the gallery and approve it or leave a note: "
             f"{api.base_url}/#/books/{assets[0]['meta']['book_id']}"
+        )
+    elif any(a["kind"] == "clip" for a in assets):
+        out.append(
+            "This is the clip's last frame. It stays on screen longest, so check that nobody left or changed. The user "
+            f"plays clips in the gallery and picks how each page is shown: {api.base_url}/#/books/"
+            f"{assets[0]['meta']['book_id']}"
         )
     elif any(a["kind"] == "page_image" for a in assets):
         out.append(f"See the whole book with get_book(book_id='{assets[0]['meta']['book_id']}').")
@@ -398,6 +417,12 @@ async def get_book(api: StudioApi, book_id: str) -> list[str | Image]:
         out.append(Image(data=await api.get_file(page["image_asset_id"], "preview"), format="png"))
     if len(waiting) > MAX_PREVIEWS:
         out.append(f"{len(waiting) - MAX_PREVIEWS} more pictures are only in the gallery.")
+    clips = [p for p in book["pages"] if p["clip_status"] == "candidate" and p["clip_asset_id"]]
+    for page in clips[:MAX_PREVIEWS]:
+        out.append(f"page {page['number']}, last frame of clip {page['clip_asset_id']}")
+        out.append(Image(data=await api.get_file(page["clip_asset_id"], "preview"), format="png"))
+    if len(clips) > MAX_PREVIEWS:
+        out.append(f"{len(clips) - MAX_PREVIEWS} more clips are only in the gallery.")
     return out
 
 
@@ -469,6 +494,32 @@ async def generate_narration(
         f"'{book_id}'). You cannot hear audio: then ask the user to listen in the gallery: "
         f"{api.base_url}/#/books/{book_id}"
     )
+
+
+async def generate_clips(api: StudioApi, book_id: str, pages: list[int] | None = None, seed: int | None = None) -> str:
+    job_ids = await api.generate_clips(book_id, pages, seed)
+    return (
+        f"Queued {len(job_ids)} clips: {', '.join(job_ids)}. About 3 minutes each, and other GPU jobs wait meanwhile. "
+        f"Follow them with get_job(job_id, wait_seconds=60), which shows each clip's last frame, or get_book(book_id="
+        f"'{book_id}'). You cannot play video: ask the user to review in the gallery: {api.base_url}/#/books/{book_id}"
+    )
+
+
+async def set_page_motion(
+    api: StudioApi,
+    page_id: str,
+    motion_prompt: str | None = None,
+    motion_still: bool | None = None,
+    clip_method: str | None = None,
+    clip_head_s: float | None = None,
+) -> str:
+    fields = {
+        "motion_prompt": motion_prompt,
+        "motion_still": motion_still,
+        "clip_method": clip_method,
+        "clip_head_s": clip_head_s,
+    }
+    return _page_line(await api.update_page(page_id, **{k: v for k, v in fields.items() if v is not None}))
 
 
 async def list_packs(api: StudioApi) -> str:

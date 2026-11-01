@@ -97,7 +97,8 @@ EXPORT_FILES = {
     "bgm": (("loop_wav", "loop_ogg"), ("full_wav", "full_ogg")),
     "page_image": (("processed",),),
     "narration": (("wav",),),
-    "book_export": (("pdf",), ("mp3",)),
+    "clip": (("mp4",),),
+    "book_export": (("pdf",), ("mp3",), ("mp4",)),
 }
 MEDIA_TYPES = {  # Windows' mimetypes lacks some
     ".flac": "audio/flac",
@@ -107,7 +108,9 @@ MEDIA_TYPES = {  # Windows' mimetypes lacks some
     ".json": "application/json",
     ".pdf": "application/pdf",
     ".mp3": "audio/mpeg",
+    ".mp4": "video/mp4",
 }
+CLIP_SOURCE_FIELDS = ("image_asset_id", "motion_prompt", "motion_still")
 NOT_NULL_PROJECT_FIELDS = ("name", "style", "pixel_art", "animation_cloud")  # in a PATCH, null leaves these
 LOCAL_HOSTS = ("127.0.0.1", "localhost")
 ANY_ADDRESS = ("0.0.0.0", "::")
@@ -154,7 +157,7 @@ class Services:
         await self.queue.start()
         self.packs.start()
         self.db.release_idle_pages()  # after the queue marked what a previous process left running as failed
-        self.db.release_idle_narration()
+        self.db.release_idle_media()
         up = await self.comfy.is_up()
         if not up:
             log.warning("ComfyUI is not reachable at %s; jobs will fail until it runs", self.settings.comfy_url)
@@ -216,7 +219,7 @@ def _book_or_404(s: Services, book_id: str) -> Book:
 
 def _book_out(s: Services, book: Book) -> BookOut:
     s.db.release_idle_pages(book.id)
-    s.db.release_idle_narration(book.id)
+    s.db.release_idle_media(book.id)
     pages = s.db.list_pages(book.id)
     candidates = {p.id: s.db.assets_with_meta("page_id", p.id) for p in pages}
     records = []
@@ -229,9 +232,11 @@ def _book_out(s: Services, book: Book) -> BookOut:
         sheets.append(SheetOut(**sheet.model_dump(), asset=AssetOut.of(asset) if asset else None))
     counts: dict[str, int] = {}
     narration_counts: dict[str, int] = {}
+    clip_counts: dict[str, int] = {}
     for page in pages:
         counts[page.status] = counts.get(page.status, 0) + 1
         narration_counts[page.narration_status] = narration_counts.get(page.narration_status, 0) + 1
+        clip_counts[page.clip_status] = clip_counts.get(page.clip_status, 0) + 1
     return BookOut(
         **book.model_dump(),
         pages=[_page_out(s, p, candidates[p.id]) for p in pages],
@@ -239,16 +244,19 @@ def _book_out(s: Services, book: Book) -> BookOut:
         terms=s.db.list_terms(book.id),
         counts=counts,
         narration_counts=narration_counts,
+        clip_counts=clip_counts,
         license_class=worst_class(records) if records else None,
     )
 
 
 def _page_out(s: Services, page: Page, candidates: list[Asset]) -> PageOut:
     takes = s.db.assets_with_meta("narration_page_id", page.id)
+    clips = s.db.assets_with_meta("clip_page_id", page.id)
     return PageOut(
         **page.model_dump(),
         candidates=[AssetOut.of(a) for a in candidates],
         narration_candidates=[AssetOut.of(a) for a in takes],
+        clip_candidates=[AssetOut.of(a) for a in clips],
     )
 
 
@@ -662,7 +670,7 @@ def create_app(
                 f"the speech pack is not installed. A person agrees to its license in the gallery: "
                 f"{_pack_url(s, SPEECH_PACK)}, then it installs there or with `aiassetstudio pack install {SPEECH_PACK}`",
             )
-        s.db.release_idle_narration(book_id)
+        s.db.release_idle_media(book_id)
         pages = s.db.list_pages(book_id)
         if body.pages is None:
             chosen = [p for p in pages if p.narration_status in ("draft", "redo")]
@@ -689,6 +697,51 @@ def create_app(
             }
             job_ids.append(s.db.create_job(book.project_id, "narration", "tts", params).id)
             s.db.update_page(page.id, narration_status="queued")
+        s.queue.notify()
+        return JobsCreated(job_ids=job_ids)
+
+    @app.post("/api/books/{book_id}/clips", status_code=202)
+    async def generate_clips(book_id: str, body: GeneratePages, s: S) -> JobsCreated:
+        """One job per page: a clip that starts from the page's approved picture. A new clip joins the page's clips."""
+        book = _book_or_404(s, book_id)
+        s.db.release_idle_media(book_id)
+        pages = s.db.list_pages(book_id)
+        if body.pages is None:
+            chosen = [
+                p
+                for p in pages
+                if p.clip_status in ("draft", "redo")
+                and p.clip_method != "still"
+                and p.motion_prompt
+                and p.status == "approved"
+            ]
+        else:
+            by_number = {p.number: p for p in pages}
+            if missing := [n for n in body.pages if n not in by_number]:
+                raise HTTPException(404, f"book {book_id!r} has no page {missing}")
+            chosen = [by_number[n] for n in dict.fromkeys(body.pages)]
+        if not chosen:
+            raise HTTPException(
+                409, "no page to animate: none has an approved picture, a motion_prompt and a clip to make"
+            )
+        if busy := [p.number for p in chosen if p.clip_status == "queued"]:
+            raise HTTPException(409, f"pages {busy} are already being animated")
+        if unapproved := [p.number for p in chosen if p.status != "approved"]:
+            raise HTTPException(422, f"pages {unapproved} have no approved picture")
+        if empty := [p.number for p in chosen if not p.motion_prompt]:
+            raise HTTPException(422, f"pages {empty} have no motion_prompt")
+        job_ids = []
+        for page in chosen:
+            params = {
+                "book_id": book_id,
+                "page_id": page.id,
+                "page_number": page.number,
+                "description": f"{book.title}, page {page.number}",
+                "count": 1,
+                "seed": body.seed,
+            }
+            job_ids.append(s.db.create_job(book.project_id, "clip", "wan", params).id)
+            s.db.update_page(page.id, clip_status="queued")
         s.queue.notify()
         return JobsCreated(job_ids=job_ids)
 
@@ -736,6 +789,21 @@ def create_app(
             if take is None:
                 raise HTTPException(422, f"page {page.number} has no narration to approve")
             fields.setdefault("narration_note", None)
+        # A clip starts from the picture and follows the motion: a change to either makes the chosen clip out of date.
+        moved = any(key in fields and fields[key] != getattr(page, key) for key in CLIP_SOURCE_FIELDS)
+        if moved and fields.get("image_asset_id", page.image_asset_id) is not None:
+            fields |= {"clip_status": "draft", "clip_asset_id": None}
+        clip = fields.get("clip_asset_id", page.clip_asset_id)
+        clips = {a.id for a in s.db.assets_with_meta("clip_page_id", page_id)}
+        if clip is not None and clip not in clips:
+            raise HTTPException(422, f"asset {clip!r} is not a clip of page {page.number}")
+        if fields.get("clip_status") == "approved":
+            method = fields.get("clip_method", page.clip_method)
+            if method == "still" and fields.get("image_asset_id", page.image_asset_id) is None:
+                raise HTTPException(422, f"page {page.number} has no picture to show")
+            if method != "still" and clip is None:
+                raise HTTPException(422, f"page {page.number} has no clip to approve; choose one or use the picture")
+            fields.setdefault("clip_note", None)
         return _page_out(s, s.db.update_page(page_id, **fields), candidates)
 
     @app.post("/api/books/{book_id}/check-sources")
@@ -768,11 +836,25 @@ def create_app(
         if not pages:
             raise HTTPException(409, f"book {book_id!r} has no pages")
         audio = body.format == "mp3"
-        states = [(p.number, p.narration_status if audio else p.status) for p in pages]
-        if not body.allow_draft and (waiting := [n for n, state in states if state != "approved"]):
-            what = "narration of pages" if audio else "pages"
-            raise HTTPException(409, f"{what} {waiting} are not approved; approve them or pass allow_draft")
-        if not any(p.narration_asset_id if audio else p.image_asset_id for p in pages):
+        video = body.format == "mp4"
+        states = {
+            "pdf": [("pages", p.number, p.status) for p in pages],
+            "mp3": [("narration of pages", p.number, p.narration_status) for p in pages],
+            "mp4": [
+                *(("narration of pages", p.number, p.narration_status) for p in pages),
+                *(("the way to show pages", p.number, p.clip_status) for p in pages),
+            ],
+        }[body.format]
+        waiting: dict[str, list[int]] = {}
+        for what, number, state in states:
+            if state != "approved":
+                waiting.setdefault(what, []).append(number)
+        if not body.allow_draft and waiting:
+            detail = "; ".join(f"{what} {numbers}" for what, numbers in waiting.items())
+            raise HTTPException(409, f"{detail} are not approved; approve them or pass allow_draft")
+        if video and not any(p.narration_asset_id and p.image_asset_id for p in pages):
+            raise HTTPException(409, f"book {book_id!r} has no page with both a chosen picture and narration")
+        if not video and not any(p.narration_asset_id if audio else p.image_asset_id for p in pages):
             raise HTTPException(409, f"book {book_id!r} has no chosen {'narration' if audio else 'pictures'}")
         params = {"book_id": book_id, "format": body.format, "description": f"{book.title} ({body.format})", "count": 1}
         job = s.db.create_job(book.project_id, "book_export", "none", params)

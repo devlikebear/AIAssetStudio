@@ -4,15 +4,16 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-JobKind = Literal["image", "bgm", "animation", "page_image", "narration", "book_export"]
+JobKind = Literal["image", "bgm", "animation", "page_image", "narration", "clip", "book_export"]
 # qwen_turbo: the official Turbo checkpoint of books; tts: the speech pack's sidecar; codex: cloud, no GPU;
 # none: on this PC, no GPU
-Family = Literal["qwen", "qwen_turbo", "ace", "yue2", "tts", "codex", "none"]
+Family = Literal["qwen", "qwen_turbo", "ace", "yue2", "wan", "tts", "codex", "none"]
 JobStatus = Literal["queued", "running", "done", "failed", "cancelled"]
-AssetKind = Literal["sprite", "icon", "bgm", "animation", "page_image", "narration", "book_export"]
+AssetKind = Literal["sprite", "icon", "bgm", "animation", "page_image", "narration", "clip", "book_export"]
 AssetStatus = Literal["candidate", "selected", "rejected"]
 PageStatus = Literal["draft", "queued", "candidate", "approved", "redo"]
 SheetKind = Literal["character", "place", "prop"]
+ClipMethod = Literal["full", "head", "still"]  # the whole clip, its first seconds, or the picture alone
 PackInstallStatus = Literal["installing", "installed", "failed", "cancelled"]
 
 TERMINAL_STATUSES: tuple[JobStatus, ...] = ("done", "failed", "cancelled")
@@ -97,6 +98,13 @@ class Page(BaseModel):
     narration_asset_id: str | None = None  # the chosen take
     narration_status: PageStatus = "draft"  # reviewed apart from the picture: one can be approved alone
     narration_note: str | None = None
+    motion_prompt: str = ""  # what moves in the clip, in English
+    motion_still: bool = True  # tell the people to stay where they are
+    clip_asset_id: str | None = None  # the chosen clip
+    clip_status: PageStatus = "draft"
+    clip_note: str | None = None
+    clip_method: ClipMethod = "full"
+    clip_head_s: float = 2.0  # seconds of the clip that the head method uses
     created_at: str
     updated_at: str
 

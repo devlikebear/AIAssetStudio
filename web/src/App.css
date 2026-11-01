@@ -1436,6 +1436,39 @@ dialog::backdrop {
   width: 100%;
 }
 
+.page-plate video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.page-last-frame {
+  margin: 0;
+}
+
+.page-last-frame img {
+  display: block;
+  width: 100%;
+}
+
+.page-last-frame figcaption {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.page-head-seconds {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.page-head-seconds input {
+  width: 72px;
+}
+
 .page-body > .page-status {
   align-self: flex-start;
 }

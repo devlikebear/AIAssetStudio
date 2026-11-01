@@ -13,7 +13,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from ..book_prompts import page_prompt, sheet_prompt
+from ..book_prompts import clip_prompt, page_prompt, sheet_prompt
 from ..comfy.client import ComfyClient, ComfyError, output_files
 from ..comfy.graphs import (
     ACE_MODELS,
@@ -26,6 +26,13 @@ from ..comfy.graphs import (
     QWEN_OUTPUT_NODE,
     QWEN_SAMPLER,
     QWEN_TURBO_STEPS,
+    WAN_FPS,
+    WAN_FRAMES,
+    WAN_HEIGHT,
+    WAN_MODELS,
+    WAN_OUTPUT_NODE,
+    WAN_STEPS,
+    WAN_WIDTH,
     YUE2_MODELS,
     YUE2_OUTPUT_NODE,
     YUE2_SAMPLER,
@@ -36,6 +43,7 @@ from ..comfy.graphs import (
     qwen_book_page,
     qwen_t2i_turbo,
     qwen_text_encode,
+    wan_i2v_lightning,
     yue2_song,
 )
 from ..config import Settings
@@ -62,6 +70,7 @@ from ..post.audio import (
     load_audio,
     make_loop,
     normalize_peak,
+    run_ffmpeg,
     trim_trailing_silence,
     write_wav,
 )
@@ -79,6 +88,7 @@ from ..post.image import (
     reference_ground,
     upscale_nearest,
 )
+from ..post.video import Shot, assemble
 from ..prompts import build_image_prompt
 from ..provenance import WARN_CLASSES, license_names, license_records, worst_class
 from ..spritegen.client import SpriteGen
@@ -107,6 +117,8 @@ ANIMATION_ROWS_AT_ONCE = 2
 CLOUD_SENT = ["the base sprite, enlarged", "sprite-gen's layout guides", "sprite-gen's prompts"]
 
 PAGE_GAP_S = 1.2  # between pages of an audiobook, as in the 2026-11-01 trial
+CLIP_FILES = {"mp4": "clip.mp4", "first": "first.png", "last": "last.png", "preview": "preview.png"}
+LOW_RAM_GB = 6  # the trial started clips with 8-10 GB free and fell to 1.8 GB
 
 
 class JobCancelled(Exception):
@@ -663,6 +675,81 @@ async def run_narration_job(ctx: RunContext, job: Job) -> None:
     ctx.db.update_page(page.id, narration_status="candidate", narration_asset_id=current.narration_asset_id or asset_id)
 
 
+def _save_clip(data: bytes, directory: Path, ffmpeg: str) -> None:
+    """clip.mp4 as ComfyUI saved it, its first and last frames, and the last one as the preview: a clip goes wrong late,
+    and with the hold method the last frame stays on screen longest."""
+    clip = directory / "clip.mp4"
+    clip.write_bytes(data)
+    run_ffmpeg(ffmpeg, ["-i", str(clip), "-frames:v", "1", str(directory / "first.png")])
+    run_ffmpeg(ffmpeg, ["-i", str(clip), "-vf", "reverse", "-frames:v", "1", str(directory / "last.png")])
+    with Image.open(directory / "last.png") as last:
+        make_preview(last.convert("RGB")).save(directory / "preview.png")
+
+
+async def run_clip_job(ctx: RunContext, job: Job) -> None:
+    """One clip that starts from a page's chosen picture. A new clip joins the page's clips; a choice already made
+    stays."""
+    params = dict(job.params)
+    if params.get("seed") is None:
+        params["seed"] = random.randrange(2**31)
+        ctx.db.update_job(job.id, params=params)
+    seed = int(params["seed"])
+    project = ctx.db.get_project(job.project)
+    page = ctx.db.get_page(params["page_id"])
+    prompt = clip_prompt(project.style, page.motion_prompt, page.motion_still)
+    warnings = []
+    ram_free = (await ctx.comfy.system_stats()).get("system", {}).get("ram_free", 0) / 2**30
+    if ram_free < LOW_RAM_GB:
+        warnings.append(
+            f"only {ram_free:.1f} GB of RAM free at the start; clips can run out of memory below {LOW_RAM_GB} GB"
+        )
+    ctx.db.update_job(job.id, stage="uploading the picture")
+    image = await ctx.comfy.upload_image(_page_picture(ctx, page), f"clip_{page.id}.png")
+    ctx.db.update_job(job.id, stage="generating")
+    asset_id = new_id()
+    prompt_id = str(uuid.uuid4())
+    ctx.prompt_ids.append(prompt_id)
+    t0 = time.monotonic()
+    await ctx.comfy.submit(wan_i2v_lightning(prompt, image, seed, f"{project.slug}_{asset_id}"), prompt_id=prompt_id)
+    entry = await ctx.comfy.wait(prompt_id, timeout=ctx.settings.clip_timeout, poll=2.0)
+    t1 = time.monotonic()
+    videos = output_files(entry, WAN_OUTPUT_NODE)
+    if not videos:
+        raise ComfyError(f"ComfyUI returned no video for prompt {prompt_id}")
+    output = videos[0]
+    data = await ctx.comfy.fetch_output(output["filename"], output["subfolder"], output.get("type", "output"))
+    directory = asset_dir(ctx.settings, project.slug, asset_id)
+    ctx.db.update_job(job.id, stage="postprocess")
+    await asyncio.to_thread(_save_clip, data, directory, ctx.settings.ffmpeg)
+    step = {"generate": round(t1 - t0, 2)}
+    meta = {
+        "book_id": page.book_id,
+        "clip_page_id": page.id,  # not page_id: that key finds a page's pictures
+        "page_number": page.number,
+        "description": params["description"],
+        "prompt": prompt,
+        "picture": page.image_asset_id,
+        "seed": seed,
+        "workflow": "wan_i2v_lightning",
+        "models": WAN_MODELS,
+        "licenses": license_records(WAN_MODELS),
+        "steps": WAN_STEPS,
+        "width": WAN_WIDTH,
+        "height": WAN_HEIGHT,
+        "frames": WAN_FRAMES,
+        "fps": WAN_FPS,
+        "ram_free_gb": round(ram_free, 2),
+        "warnings": warnings,
+        "comfy_prompt_id": prompt_id,
+        "timings": step,
+    }
+    files = {name: to_rel(ctx.settings, directory / file) for name, file in CLIP_FILES.items()}
+    ctx.db.create_asset(job.id, job.project_id, "clip", files=files, meta=meta, seed=seed, asset_id=asset_id)
+    ctx.db.update_job(job.id, timings=step)
+    current = ctx.db.get_page(page.id)
+    ctx.db.update_page(page.id, clip_status="candidate", clip_asset_id=current.clip_asset_id or asset_id)
+
+
 def _page_picture(ctx: RunContext, page: Page) -> Path:
     asset = ctx.db.get_asset(page.image_asset_id)
     path = from_rel(ctx.settings, asset.files["processed"]) if asset is not None else None
@@ -722,13 +809,102 @@ async def _export_mp3(ctx: RunContext, job: Job, project: Project, book: Book) -
     ctx.db.update_job(job.id, timings={"export": round(time.monotonic() - t0, 2)})
 
 
+def _shot(ctx: RunContext, page: Page, start_s: float, length_s: float) -> Shot:
+    clip = ctx.db.get_asset(page.clip_asset_id) if page.clip_asset_id and page.clip_method != "still" else None
+    path = from_rel(ctx.settings, clip.files["mp4"]) if clip is not None else None
+    if path is not None and not path.is_file():
+        raise FileNotFoundError(f"the clip of page {page.number} is missing")
+    return Shot(
+        picture=_page_picture(ctx, page),
+        clip=path,
+        clip_frames=clip.meta["frames"] if clip is not None else 0,
+        method=page.clip_method if clip is not None else "still",
+        head_s=page.clip_head_s,
+        text=page.text,
+        start_s=start_s,
+        length_s=length_s,
+    )
+
+
+async def _export_mp4(ctx: RunContext, job: Job, project: Project, book: Book) -> None:
+    """Pictures or clips, narration and subtitles. A page with no clip shows its picture."""
+    pages = [p for p in ctx.db.list_pages(book.id) if p.narration_asset_id and p.image_asset_id]
+    if not pages:
+        raise ValueError(f"book {book.id} has no page with both a chosen picture and narration")
+    t0 = time.monotonic()
+    takes = [ctx.db.get_asset(p.narration_asset_id) for p in pages]
+    audio_paths = [from_rel(ctx.settings, take.files["wav"]) for take in takes]
+    if missing := [p.number for p, path in zip(pages, audio_paths, strict=True) if not path.is_file()]:
+        raise FileNotFoundError(f"the narration of pages {missing} is missing")
+    asset_id = new_id()
+    directory = asset_dir(ctx.settings, project.slug, asset_id)
+    work = directory / "work"
+    work.mkdir(exist_ok=True)
+    ctx.db.update_job(job.id, stage="joining pages")
+    spans = await asyncio.to_thread(concat_with_gaps, audio_paths, work / "narration.wav", PAGE_GAP_S)
+    shots = [_shot(ctx, p, start, length) for p, (start, length) in zip(pages, spans, strict=True)]
+    used = [*takes, *(ctx.db.get_asset(p.image_asset_id) for p in pages)]
+    used += [ctx.db.get_asset(p.clip_asset_id) for p, shot in zip(pages, shots, strict=True) if shot.clip is not None]
+    records = list({r["file"]: r for asset in used for r in asset.meta.get("licenses", [])}.values())
+    worst = worst_class(records)
+    warned = worst in WARN_CLASSES
+    names = license_names([r for r in records if r["class"] in WARN_CLASSES])
+    ctx.db.update_job(job.id, stage="assembling video")
+    info = await asyncio.to_thread(
+        assemble,
+        shots,
+        work / "narration.wav",
+        directory / "book.mp4",
+        work,
+        ctx.settings.ffmpeg,
+        [f"Made with: {name}" for name in names] if warned else [],
+    )
+    await asyncio.to_thread(shutil.rmtree, work)
+    await asyncio.to_thread(_clip_preview, directory, ctx.settings.ffmpeg)
+    warnings = []
+    if warned:
+        warnings.append(f"license: {'; '.join(names)}. Check it before sharing or selling this book.")
+    meta = {
+        "book_id": book.id,
+        "description": book.title,
+        "format": "mp4",
+        "pages": [p.number for p in pages],
+        "unapproved_pages": [p.number for p in pages if p.clip_status != "approved"],
+        "methods": {str(p.number): shot.method for p, shot in zip(pages, shots, strict=True)},
+        "page_starts": [
+            {"page": p.number, "start_s": start, "length_s": length}
+            for p, (start, length) in zip(pages, spans, strict=True)
+        ],
+        **info,
+        "licenses": records,
+        "license_class": worst,
+        "warnings": warnings,
+    }
+    files = {
+        "mp4": to_rel(ctx.settings, directory / "book.mp4"),
+        "preview": to_rel(ctx.settings, directory / "preview.png"),
+    }
+    ctx.db.create_asset(job.id, job.project_id, "book_export", files=files, meta=meta, asset_id=asset_id)
+    ctx.db.update_job(job.id, timings={"export": round(time.monotonic() - t0, 2)})
+
+
+def _clip_preview(directory: Path, ffmpeg: str) -> None:
+    run_ffmpeg(ffmpeg, ["-ss", "1", "-i", str(directory / "book.mp4"), "-frames:v", "1", str(directory / "first.png")])
+    with Image.open(directory / "first.png") as frame:
+        make_preview(frame.convert("RGB")).save(directory / "preview.png")
+    (directory / "first.png").unlink()
+
+
 async def run_book_export_job(ctx: RunContext, job: Job) -> None:
-    """The book as a PDF of its chosen pictures and text, or an MP3 of its chosen narration; a job so that it shares
-    the queue, the status and the gallery."""
+    """The book as a PDF of its chosen pictures and text, an MP3 of its chosen narration, or an MP4 of both; a job so
+    that it shares the queue, the status and the gallery."""
     project = ctx.db.get_project(job.project)
     book = ctx.db.get_book(job.params["book_id"])
     if job.params.get("format") == "mp3":
         await _export_mp3(ctx, job, project, book)
+        return
+    if job.params.get("format") == "mp4":
+        await _export_mp4(ctx, job, project, book)
         return
     pages = [p for p in ctx.db.list_pages(book.id) if p.image_asset_id]
     if not pages:
@@ -785,5 +961,6 @@ RUNNERS = {
     "animation": run_animation_job,
     "page_image": run_page_image_job,
     "narration": run_narration_job,
+    "clip": run_clip_job,
     "book_export": run_book_export_job,
 }

@@ -350,6 +350,17 @@ def test_version_2_database_upgrades(tmp_path):
     db.close()
 
 
+CLIP_COLUMNS = (
+    "motion_prompt",
+    "motion_still",
+    "clip_asset_id",
+    "clip_status",
+    "clip_note",
+    "clip_method",
+    "clip_head_s",
+)
+
+
 def test_version_3_database_keeps_its_pages(tmp_path):
     """The step that adds packs and narration, on a book made by the version before it."""
     path = tmp_path / "studio.db"
@@ -360,7 +371,8 @@ def test_version_3_database_keeps_its_pages(tmp_path):
     db._conn.executescript(
         "DROP TABLE pack_consents; DROP TABLE pack_installs; ALTER TABLE pages DROP COLUMN narration_asset_id;"
         "ALTER TABLE pages DROP COLUMN narration_status; ALTER TABLE pages DROP COLUMN narration_note;"
-        "PRAGMA user_version = 3;"
+        + "".join(f"ALTER TABLE pages DROP COLUMN {column};" for column in CLIP_COLUMNS)
+        + "PRAGMA user_version = 3;"
     )
     db.close()
     db = Database(path)

@@ -2,7 +2,8 @@
 
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 export type AssetStatus = 'candidate' | 'selected' | 'rejected'
-export type AssetKind = 'sprite' | 'icon' | 'bgm' | 'animation' | 'page_image' | 'narration' | 'book_export'
+export type AssetKind = 'sprite' | 'icon' | 'bgm' | 'animation' | 'page_image' | 'narration' | 'clip' | 'book_export'
+export type ClipMethod = 'full' | 'head' | 'still'
 export type PageStatus = 'draft' | 'queued' | 'candidate' | 'approved' | 'redo'
 
 export interface Project {
@@ -27,7 +28,7 @@ export interface Job {
   id: string
   project_id: number
   project: string
-  kind: 'image' | 'bgm' | 'animation' | 'page_image' | 'narration' | 'book_export'
+  kind: 'image' | 'bgm' | 'animation' | 'page_image' | 'narration' | 'clip' | 'book_export'
   family: string
   params: {
     kind?: string
@@ -203,6 +204,14 @@ export interface Page {
   narration_status: PageStatus
   narration_note: string | null
   narration_candidates: Asset[]
+  motion_prompt: string
+  motion_still: boolean
+  clip_asset_id: string | null
+  clip_status: PageStatus
+  clip_note: string | null
+  clip_method: ClipMethod
+  clip_head_s: number
+  clip_candidates: Asset[]
 }
 
 export interface Sheet {
@@ -229,6 +238,7 @@ export interface Book extends BookSummary {
   sheets: Sheet[]
   counts: Partial<Record<PageStatus, number>>
   narration_counts: Partial<Record<PageStatus, number>>
+  clip_counts: Partial<Record<PageStatus, number>>
   license_class: 'open' | 'community' | 'unknown' | 'research_only' | null
 }
 
@@ -348,15 +358,26 @@ export const updatePage = (
     narration_status?: 'approved' | 'redo' | 'draft'
     narration_note?: string | null
     narration_asset_id?: string
+    clip_status?: 'approved' | 'redo' | 'draft'
+    clip_note?: string | null
+    clip_asset_id?: string
+    clip_method?: ClipMethod
+    clip_head_s?: number
   },
 ) => request<Page>(`/api/pages/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(fields) })
-export const exportBook = (id: string, allowDraft: boolean, format: 'pdf' | 'mp3' = 'pdf') =>
+export const exportBook = (id: string, allowDraft: boolean, format: 'pdf' | 'mp3' | 'mp4' = 'pdf') =>
   request<{ job_id: string }>(`/api/books/${encodeURIComponent(id)}/export`, {
     method: 'POST',
     body: JSON.stringify({ allow_draft: allowDraft, format }),
   })
 export const narrateBook = (id: string) =>
   request<{ job_ids: string[] }>(`/api/books/${encodeURIComponent(id)}/narrate`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+
+export const animateBook = (id: string) =>
+  request<{ job_ids: string[] }>(`/api/books/${encodeURIComponent(id)}/clips`, {
     method: 'POST',
     body: JSON.stringify({}),
   })

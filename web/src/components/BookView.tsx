@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 
-import { type Asset, exportBook, getBook, getPack, listAssets, narrateBook, type Page, updatePage } from '../api'
+import { animateBook, type Asset, exportBook, getBook, getPack, listAssets, narrateBook, type Page, updatePage } from '../api'
 import { usePoll } from '../hooks'
 import { PageCard } from './PageCard'
 
@@ -27,6 +27,7 @@ export function BookView({ bookId, onError }: Props) {
   )
   const [exporting, setExporting] = useState(false)
   const [narrating, setNarrating] = useState(false)
+  const [animating, setAnimating] = useState(false)
   const speech = usePoll(() => getPack(SPEECH_PACK), 10000, 'speech-pack')
 
   const change = useCallback(
@@ -54,7 +55,19 @@ export function BookView({ bookId, onError }: Props) {
     book.refresh()
   }
 
-  const startExport = async (allowDraft: boolean, format: 'pdf' | 'mp3' = 'pdf') => {
+  const startClips = async () => {
+    setAnimating(true)
+    try {
+      await animateBook(bookId)
+      onError(undefined)
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e))
+    }
+    setAnimating(false)
+    book.refresh()
+  }
+
+  const startExport = async (allowDraft: boolean, format: 'pdf' | 'mp3' | 'mp4' = 'pdf') => {
     setExporting(true)
     try {
       await exportBook(bookId, allowDraft, format)
@@ -77,6 +90,12 @@ export function BookView({ bookId, onError }: Props) {
   const waitingTakes = data.pages.filter((page) => page.narration_status === 'candidate' && page.narration_asset_id)
   const toNarrate = data.pages.filter((p) => p.text && (p.narration_status === 'draft' || p.narration_status === 'redo'))
   const speechReady = speech.data?.status === 'installed'
+  const shown = data.clip_counts.approved ?? 0
+  const waitingClips = data.pages.filter((page) => page.clip_status === 'candidate' && page.clip_asset_id)
+  const toAnimate = data.pages.filter(
+    (p) => p.status === 'approved' && p.motion_prompt && p.clip_method !== 'still' && (p.clip_status === 'draft' || p.clip_status === 'redo'),
+  )
+  const videoReady = spoken === total && shown === total
   const licenseNote = data.license_class ? LICENSE_NOTE[data.license_class] : undefined
   const files = (exports.data ?? []).filter((a: Asset) => a.meta.book_id === bookId).reverse()
 
@@ -139,6 +158,30 @@ export function BookView({ bookId, onError }: Props) {
               </button>
             </div>
           </div>
+          <div className="book-track">
+            <p className="book-progress">
+              영상 {total}쪽 중 {shown}쪽 채택
+              {total > 0 && (videoReady ? ' · MP4를 내보낼 수 있습니다' : ' · 낭독과 영상을 모두 채택해야 MP4를 내보낼 수 있습니다')}
+            </p>
+            <div className="page-actions">
+              <button type="button" className="btn btn-ghost" disabled={animating || toAnimate.length === 0} onClick={startClips}>
+                클립 {toAnimate.length}쪽 만들기
+              </button>
+              <ApproveAll
+                pages={waitingClips}
+                fields={{ clip_status: 'approved' }}
+                label="영상"
+                onDone={book.refresh}
+                onError={onError}
+              />
+              <button type="button" className="btn btn-primary" disabled={exporting || total === 0 || !videoReady} onClick={() => startExport(false, 'mp4')}>
+                MP4 내보내기
+              </button>
+              <button type="button" className="btn btn-ghost" disabled={exporting || !data.pages.some((p) => p.narration_asset_id)} onClick={() => startExport(true, 'mp4')}>
+                검수용 MP4
+              </button>
+            </div>
+          </div>
         </div>
       </header>
 
@@ -155,8 +198,8 @@ export function BookView({ bookId, onError }: Props) {
         <ul className="book-exports" aria-label="내보낸 파일">
           {files.slice(0, 3).map((file) => (
             <li key={file.id}>
-              <a href={file.files.pdf ?? file.files.mp3} target="_blank" rel="noreferrer">
-                {file.files.pdf ? 'PDF' : 'MP3'} {new Date(file.created_at).toLocaleString('ko-KR')}
+              <a href={file.files.pdf ?? file.files.mp3 ?? file.files.mp4} target="_blank" rel="noreferrer">
+                {file.files.pdf ? 'PDF' : file.files.mp3 ? 'MP3' : 'MP4'} {new Date(file.created_at).toLocaleString('ko-KR')}
               </a>
               {/* License warnings are in the banner above; what remains is about the layout. */}
               {(file.meta.warnings as string[] | undefined)

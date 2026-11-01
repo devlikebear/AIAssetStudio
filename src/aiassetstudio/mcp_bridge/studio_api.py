@@ -237,6 +237,10 @@ class StudioApi:
         body = {"pages": pages, "seed": seed}
         return (await self._request("POST", f"/api/books/{book_id}/narrate", json=body)).json()["job_ids"]
 
+    async def generate_clips(self, book_id: str, pages: list[int] | None, seed: int | None) -> list[str]:
+        body = {"pages": pages, "seed": seed}
+        return (await self._request("POST", f"/api/books/{book_id}/clips", json=body)).json()["job_ids"]
+
     async def list_packs(self) -> list[dict]:
         return (await self._request("GET", "/api/packs")).json()
 

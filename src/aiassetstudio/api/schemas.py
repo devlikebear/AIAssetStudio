@@ -7,7 +7,7 @@ from pydantic import BaseModel, BeforeValidator, Field, StringConstraints, field
 
 from ..comfy.graphs import KEYSCALES
 from ..store.files import SLUG_PATTERN
-from ..store.models import Asset, AssetStatus, Book, Job, Page, Sheet, SheetKind, Term
+from ..store.models import Asset, AssetStatus, Book, ClipMethod, Job, Page, Sheet, SheetKind, Term
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 LongText = Annotated[str, StringConstraints(strip_whitespace=True, max_length=4000)]
@@ -198,6 +198,13 @@ class PageUpdate(BaseModel):
     narration_status: Literal["approved", "redo", "draft"] | None = None
     narration_note: LongText | None = None
     narration_asset_id: str | None = None
+    motion_prompt: LongText | None = None
+    motion_still: bool | None = None
+    clip_status: Literal["approved", "redo", "draft"] | None = None
+    clip_note: LongText | None = None
+    clip_asset_id: str | None = None
+    clip_method: ClipMethod | None = None
+    clip_head_s: float | None = Field(None, ge=0.5, le=5.0)
 
 
 class GeneratePages(BaseModel):
@@ -226,13 +233,14 @@ class StalePage(BaseModel):
 
 
 class BookExportRequest(BaseModel):
-    format: Literal["pdf", "mp3"] = "pdf"
+    format: Literal["pdf", "mp3", "mp4"] = "pdf"
     allow_draft: bool = False  # include pages that were not approved
 
 
 class PageOut(Page):
     candidates: list[AssetOut] = Field(default_factory=list)
     narration_candidates: list[AssetOut] = Field(default_factory=list)
+    clip_candidates: list[AssetOut] = Field(default_factory=list)
 
 
 class SheetOut(Sheet):
@@ -245,6 +253,7 @@ class BookOut(Book):
     terms: list[Term]
     counts: dict[str, int]  # page status -> pages
     narration_counts: dict[str, int]  # narration status -> pages
+    clip_counts: dict[str, int]  # clip status -> pages
     license_class: str | None  # of the chosen pictures; None until one is chosen
 
 

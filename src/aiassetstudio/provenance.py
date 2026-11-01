@@ -14,6 +14,12 @@ from .comfy.graphs import (
     QWEN_UNET,
     QWEN_VAE,
     VIGGLE_LORA,
+    WAN_LORA_HIGH,
+    WAN_LORA_LOW,
+    WAN_TE,
+    WAN_UNET_HIGH,
+    WAN_UNET_LOW,
+    WAN_VAE,
     YUE2_CKPT,
 )
 from .narration import SPEECH_MODEL
@@ -47,6 +53,8 @@ MODEL_LICENSES: dict[str, ModelLicense] = {
     YUE2_CKPT: ModelLicense("YuE2", "YuE2 model license", "community"),
     SPEECH_MODEL: ModelLicense("Qwen3-TTS", "Apache License 2.0", "open"),
 }
+_WAN = ModelLicense("Wan 2.2", "Apache License 2.0", "open")
+MODEL_LICENSES |= {f: _WAN for f in (WAN_UNET_HIGH, WAN_UNET_LOW, WAN_LORA_HIGH, WAN_LORA_LOW, WAN_TE, WAN_VAE)}
 _UNLISTED = ModelLicense("unlisted model", "not recorded", "unknown")
 
 
