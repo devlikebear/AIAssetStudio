@@ -25,6 +25,8 @@ export function BookView({ bookId, onError }: Props) {
     `exports:${project ?? ''}`,
   )
   const [exporting, setExporting] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const [approving, setApproving] = useState(false)
 
   const change = useCallback(
     async (page: Page, fields: Parameters<typeof updatePage>[1]) => {
@@ -38,6 +40,20 @@ export function BookView({ bookId, onError }: Props) {
     },
     [book, onError],
   )
+
+  // Page by page, as the single button does; a failure stops here and leaves the rest waiting.
+  const approveAll = async (pages: Page[]) => {
+    setConfirming(false)
+    setApproving(true)
+    try {
+      for (const page of pages) await updatePage(page.id, { status: 'approved' })
+      onError(undefined)
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e))
+    }
+    setApproving(false)
+    book.refresh()
+  }
 
   const startExport = async (allowDraft: boolean) => {
     setExporting(true)
@@ -57,6 +73,7 @@ export function BookView({ bookId, onError }: Props) {
 
   const approved = data.counts.approved ?? 0
   const total = data.pages.length
+  const waiting = data.pages.filter((page) => page.status === 'candidate' && page.image_asset_id)
   const licenseNote = data.license_class ? LICENSE_NOTE[data.license_class] : undefined
   const files = (exports.data ?? []).filter((a: Asset) => a.meta.book_id === bookId).reverse()
 
@@ -69,8 +86,25 @@ export function BookView({ bookId, onError }: Props) {
         <h1>{data.title}</h1>
         <p className="book-progress">
           {total}쪽 중 {approved}쪽 채택
+          {total > 0 && (approved < total ? ` · 남은 ${total - approved}쪽을 모두 채택해야 PDF를 내보낼 수 있습니다` : ' · PDF를 내보낼 수 있습니다')}
         </p>
         <div className="page-actions">
+          {confirming ? (
+            <>
+              <button type="button" className="btn btn-primary" onClick={() => approveAll(waiting)}>
+                {waiting.length}쪽 채택 확인
+              </button>
+              <button type="button" className="btn btn-ghost" onClick={() => setConfirming(false)}>
+                취소
+              </button>
+            </>
+          ) : (
+            waiting.length > 0 && (
+              <button type="button" className="btn btn-ghost" disabled={approving} onClick={() => setConfirming(true)}>
+                검수 대기 {waiting.length}쪽 모두 채택
+              </button>
+            )
+          )}
           <button type="button" className="btn btn-primary" disabled={exporting || total === 0 || approved < total} onClick={() => startExport(false)}>
             PDF 내보내기
           </button>
