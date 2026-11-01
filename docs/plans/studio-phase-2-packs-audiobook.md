@@ -201,11 +201,11 @@ CLI가 PC 환경을 점검하고 Studio를 준비한다. 갤러리의 기능 팩
 
 **실행 확인:**
 - [x] `uv run pytest`, `uv run ruff check .`, `npm run lint`, `npm run build`
-- [x] GPU 종단검증 `uv run pytest -m gpu tests/gpu/test_audiobook.py`: 이미지, 낭독 2쪽, 이미지, MP3 순서. 62초. 시험 환경의 Python과 모델을 `AIAS_TEST_TTS_*`로 지정했다. 실제 팩 설치본으로는 아직 돌리지 않았다.
+- [x] GPU 종단검증 `uv run pytest -m gpu tests/gpu/test_audiobook.py`: 이미지, 낭독 2쪽, 이미지, MP3 순서. CLI로 재설치한 실제 팩으로 77초에 통과했다.
 
 **수동 확인:**
-- [ ] 임시 `AIAS_DATA_DIR`에서 갤러리로 음성 팩을 동의하고, CLI로 설치, 삭제한다. 삭제 후 전역 캐시와 ComfyUI가 그대로다.
-- [ ] 사용자가 낭독을 듣고 쪽별로 채택, 재작업한 뒤 MP3를 내보낸다.
+- [x] 임시 `AIAS_DATA_DIR`에서 갤러리로 음성 팩을 동의하고, CLI로 설치, 삭제한다. 삭제 후 전역 캐시와 ComfyUI가 그대로다. 임시 폴더가 아니라 실제 데이터에서 사용자가 동의한 뒤 `pack remove`, `pack install` 순서로 확인했다. 삭제 후 전역 Hugging Face 캐시와 ComfyUI 모델의 파일 수와 크기가 같았다. 삭제해도 동의 기록은 남아 재설치에 다시 동의할 필요가 없었다.
+- [x] 사용자가 낭독을 듣고 쪽별로 채택, 재작업한 뒤 MP3를 내보낸다. 12쪽을 재작업 없이 모두 채택했다. MP3는 322.88초로 `page_starts`의 끝과 일치하고, 라이선스 경고는 없다. 사람이 남긴 낭독 재작업 메모의 왕복은 자동 테스트로만 확인했다.
 
 **이 체크포인트를 통과하면 사용자에게 확인 요청 후 Phase 3으로 진행.**
 실패하면 실패 항목을 보고하고, 원인을 함께 파악해 수정한 뒤 다시 검증한다.
