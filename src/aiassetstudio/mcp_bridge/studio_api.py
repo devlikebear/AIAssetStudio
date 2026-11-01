@@ -175,3 +175,41 @@ class StudioApi:
 
     async def get_file(self, asset_id: str, name: str) -> bytes:
         return (await self._request("GET", f"/api/assets/{asset_id}/files/{name}")).content
+
+    async def create_book(self, project: str, title: str, source: dict | None, **size) -> dict:
+        body = {"project": project, "title": title, "source": source}
+        return (await self._request("POST", "/api/books", json=body | {k: v for k, v in size.items() if v})).json()
+
+    async def get_book(self, book_id: str) -> dict:
+        return (await self._request("GET", f"/api/books/{book_id}")).json()
+
+    async def update_book(self, book_id: str, **fields) -> dict:
+        return (await self._request("PATCH", f"/api/books/{book_id}", json=fields)).json()
+
+    async def save_pages(self, book_id: str, pages: list[dict]) -> dict:
+        return (await self._request("PUT", f"/api/books/{book_id}/pages", json=pages)).json()
+
+    async def save_sheets(self, book_id: str, sheets: list[dict]) -> dict:
+        return (await self._request("PUT", f"/api/books/{book_id}/sheets", json=sheets)).json()
+
+    async def set_terms(self, book_id: str, terms: list[dict]) -> list[dict]:
+        return (await self._request("PUT", f"/api/books/{book_id}/terms", json=terms)).json()
+
+    async def generate_pages(self, book_id: str, pages: list[int] | None, seed: int | None) -> list[str]:
+        body = {"pages": pages, "seed": seed}
+        return (await self._request("POST", f"/api/books/{book_id}/generate", json=body)).json()["job_ids"]
+
+    async def generate_sheet(self, sheet_id: str, seed: int | None) -> str:
+        r = await self._request("POST", f"/api/sheets/{sheet_id}/generate", json={"seed": seed})
+        return r.json()["job_id"]
+
+    async def update_page(self, page_id: str, **fields) -> dict:
+        return (await self._request("PATCH", f"/api/pages/{page_id}", json=fields)).json()
+
+    async def check_sources(self, book_id: str, versions: dict[str, int]) -> list[dict]:
+        r = await self._request("POST", f"/api/books/{book_id}/check-sources", json={"versions": versions})
+        return r.json()
+
+    async def export_book(self, book_id: str, allow_draft: bool) -> str:
+        r = await self._request("POST", f"/api/books/{book_id}/export", json={"allow_draft": allow_draft})
+        return r.json()["job_id"]

@@ -137,6 +137,17 @@ async def test_server_registers_every_tool():
         "set_asset_status",
         "export_asset",
         "cancel_job",
+        "create_book",
+        "get_book",
+        "set_book_pages",
+        "set_book_sheets",
+        "set_book_terms",
+        "set_book_cover",
+        "generate_sheet",
+        "generate_pages",
+        "set_page",
+        "check_book_sources",
+        "export_book",
     }
     reference = listed["update_project"].input_schema["properties"]["reference_image"]
     assert "must be an absolute path; it is copied into the studio" in reference["description"]
@@ -144,6 +155,55 @@ async def test_server_registers_every_tool():
     assert kind["enum"] == ["sprite", "icon"]
     assert listed["get_job"].output_schema is None  # previews come back as image content, not JSON
     assert all(t.description for t in listed.values())
+
+
+async def test_only_the_person_approves_a_page():
+    listed = {t.name: t for t in await server.mcp.list_tools()}
+    status = listed["set_page"].input_schema["properties"]["status"]
+    assert "approved" not in str(status)
+
+
+async def test_book_flow(api):
+    await tools.create_project(api, "story", "Story", style="Ink wash.")
+    created = await tools.create_book(api, "story", "A Book", {"label": "A Work"})
+    book_id = created.splitlines()[1].split()[1]
+    text = await tools.set_book_pages(
+        api,
+        book_id,
+        [
+            {
+                "number": 1,
+                "text": "Words.",
+                "image_prompt": "A scene.",
+                "source_refs": [{"node_id": "n1", "content_version": 2, "label": "Chapter 1"}],
+            },
+            {"number": 2, "text": "More.", "image_prompt": "Another."},
+        ],
+    )
+    assert "rests on Chapter 1" in text
+    assert "NO SOURCE RECORDED" in text
+    await tools.set_book_terms(api, book_id, [{"term": "abc", "spoken": "a b c"}])
+
+    queued = await tools.generate_pages(api, book_id)
+    assert "Queued 2 pages" in queued
+    job_ids = queued.split(": ", 1)[1].split(". ")[0].split(", ")
+    for job_id in job_ids:
+        await tools.get_job(api, job_id, wait_seconds=10)
+
+    view = await tools.get_book(api, book_id)
+    assert "0/2 pages approved" in view[0]
+    assert "license of the chosen pictures: research_only" in view[0]
+    assert f"/#/books/{book_id}" in view[0]
+    assert sum(isinstance(item, tools.Image) for item in view) == 2
+
+    pages = (await api.get_book(book_id))["pages"]
+    sent_back = await tools.set_page(api, pages[0]["id"], status="redo", note="Darker, please.")
+    assert "the person asks: Darker, please." in sent_back
+
+    assert "Every page rests" in await tools.check_book_sources(api, book_id, {"n1": 2})
+    assert "was version 2, now 3" in await tools.check_book_sources(api, book_id, {"n1": 3})
+    with pytest.raises(BackendError, match="not approved"):
+        await tools.export_book(api, book_id)
 
 
 async def test_bgm_flow(api, tmp_path):
@@ -173,7 +233,7 @@ async def test_bgm_tool_description():
         " ".join(listed["generate_bgm"].description.split())
     )
     kinds = listed["list_assets"].input_schema["properties"]["kind"]["anyOf"][0]["enum"]
-    assert kinds == ["sprite", "icon", "bgm", "animation"]
+    assert kinds == ["sprite", "icon", "bgm", "animation", "page_image", "book_export"]
 
 
 async def test_animation_tool_description():

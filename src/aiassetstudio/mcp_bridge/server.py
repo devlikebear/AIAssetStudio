@@ -28,7 +28,18 @@ pick -> export_asset to copy the processed PNG into the game. The user can also 
 (link in get_job). One job runs at a time; other requests wait in a queue. Write descriptions in English.
 For music: generate_bgm -> get_job. You cannot hear audio, so the user listens in the gallery and picks.
 For animation (pixel-art projects): generate_animation(asset_id of a sprite) -> get_job (a sheet of the 10 frames)
--> export_asset (the game's row PNG, a folder of frames and a JSON of the tags)."""
+-> export_asset (the game's row PNG, a folder of frames and a JSON of the tags).
+
+For a picture book made from a work: read the work where it lives (for a Linetta work, with its linetta_* tools) and
+never invent. Studio does not reach that system. create_project (its style) -> create_book -> describe the people,
+places and props once with set_book_sheets. Draw each person with generate_image(kind="sprite") and link the chosen
+asset_id; draw each place with generate_sheet. A place picture must be empty: its camera and objects come back in
+every page that uses it. -> set_book_pages: text in the work's own words, nothing the source does not say, and
+source_refs naming the scenes it rests on with their content_version -> generate_pages -> ask the user to review in the
+gallery; only they approve -> get_book shows their redo notes -> fix the prompt, generate_pages again -> export_book.
+Writing image_prompt, in English: say how many people are in the picture. Turn a person so the trait that matters can
+be seen. Give minor characters their own look and keep them small, or they take on a reference's face. Name a prop's
+shape and make it large enough to read. A small color detail may not hold; say so to the user rather than retrying."""
 
 mcp = MCPServer("aiassetstudio", instructions=INSTRUCTIONS)
 _api: StudioApi | None = None
@@ -36,6 +47,7 @@ _api: StudioApi | None = None
 Slug = Annotated[str, Field(description="Project slug, e.g. 'lastlight' (a-z, 0-9, '-')")]
 AssetId = Annotated[str, Field(description="Asset id from get_job or list_assets")]
 JobId = Annotated[str, Field(description="Job id from generate_image")]
+BookId = Annotated[str, Field(description="Book id from create_book")]
 REFERENCE_NOTE = (
     "Absolute path of a PNG or JPEG (up to 4096 px) whose art style new sprites follow; icons ignore it. "
     "The reference image must be an absolute path; it is copied into the studio and the original is only read."
@@ -225,7 +237,10 @@ async def get_job(
 @mcp.tool(structured_output=False)
 async def list_assets(
     project: Slug,
-    kind: Annotated[Literal["sprite", "icon", "bgm", "animation"] | None, Field(description="Only this kind")] = None,
+    kind: Annotated[
+        Literal["sprite", "icon", "bgm", "animation", "page_image", "book_export"] | None,
+        Field(description="Only this kind"),
+    ] = None,
     status: Annotated[
         Literal["candidate", "selected", "rejected"] | None, Field(description="Only this status")
     ] = None,
@@ -263,6 +278,133 @@ async def export_asset(
 async def cancel_job(job_id: JobId) -> str:
     """Cancel a queued or running job. Candidates finished before the cancel are kept."""
     return await _call(tools.cancel_job, job_id)
+
+
+@mcp.tool(structured_output=False)
+async def create_book(
+    project: Slug,
+    title: Annotated[str, Field(description="The book's title")],
+    source: Annotated[
+        dict | None,
+        Field(description="Where the work comes from: {'system', 'work_id', 'label'}. Shown, never fetched"),
+    ] = None,
+    width: Annotated[int | None, Field(description="Picture width, 512-1536, a multiple of 16; default 1184")] = None,
+    height: Annotated[int | None, Field(description="Picture height, 512-1536, a multiple of 16; default 880")] = None,
+) -> str:
+    """Start a picture book in a project, whose style every page uses."""
+    return await _call(tools.create_book, project, title, source, width, height)
+
+
+@mcp.tool()
+async def get_book(book_id: BookId) -> list[str | Image]:
+    """Show a book: each page's status, chosen picture, source and the person's redo notes, the sheets, a warning if the
+    license limits sharing, and previews of pictures waiting for review. Read it before regenerating anything."""
+    return await _call(tools.get_book, book_id)
+
+
+@mcp.tool(structured_output=False)
+async def set_book_pages(
+    book_id: BookId,
+    pages: Annotated[
+        list[dict],
+        Field(
+            description="Pages by number; pages not listed stay. Each: number, text (the page's words), image_prompt "
+            "(the scene, in English), people (names of character sheets, most important first; two become references), "
+            "props (prop sheet names or plain words), place (a place sheet name or plain words), source_refs "
+            "[{node_id, content_version, label}]. Changing what a page shows sends it back to draft; changing only "
+            "its text keeps the picture."
+        ),
+    ],
+) -> str:
+    """Add or change a book's pages."""
+    return await _call(tools.set_book_pages, book_id, pages)
+
+
+@mcp.tool(structured_output=False)
+async def set_book_sheets(
+    book_id: BookId,
+    sheets: Annotated[
+        list[dict],
+        Field(
+            description="Each: kind (character, place or prop), name, description (in English), asset_id (a sprite "
+            "for a character, from generate_image). Omitting asset_id keeps the sheet's picture."
+        ),
+    ],
+) -> str:
+    """Add or change the people, places and props that must stay the same across pages."""
+    return await _call(tools.set_book_sheets, book_id, sheets)
+
+
+@mcp.tool(structured_output=False)
+async def set_book_terms(
+    book_id: BookId,
+    terms: Annotated[list[dict], Field(description="Each: term, spoken (how to write it so a narrator says it right)")],
+) -> str:
+    """Replace the book's list of pronunciations, kept for narration."""
+    return await _call(tools.set_book_terms, book_id, terms)
+
+
+@mcp.tool(structured_output=False)
+async def set_book_cover(
+    book_id: BookId, page: Annotated[int, Field(ge=1, description="The page whose picture is the cover")]
+) -> str:
+    """Choose the page whose picture is the cover; by default the first."""
+    return await _call(tools.set_book_cover, book_id, page)
+
+
+@mcp.tool(structured_output=False)
+async def generate_sheet(
+    sheet_id: Annotated[str, Field(description="A place or prop sheet, from get_book")],
+    seed: Annotated[int | None, Field(ge=0, description="Random if omitted")] = None,
+) -> str:
+    """Queue an opaque picture of a place or prop sheet. A place comes out empty. Characters are drawn with
+    generate_image(kind="sprite") instead."""
+    return await _call(tools.generate_sheet, sheet_id, seed)
+
+
+@mcp.tool(structured_output=False)
+async def generate_pages(
+    book_id: BookId,
+    pages: Annotated[list[int] | None, Field(description="Page numbers; omit for every page in draft or redo")] = None,
+    seed: Annotated[int | None, Field(ge=0, description="Random per page if omitted")] = None,
+) -> str:
+    """Queue one full-page picture per page, about 30 s each. A new picture joins the page's candidates; the choice
+    already made stays."""
+    return await _call(tools.generate_pages, book_id, pages, seed)
+
+
+@mcp.tool(structured_output=False)
+async def set_page(
+    page_id: Annotated[str, Field(description="The page's id, from the book")],
+    image_asset_id: Annotated[str | None, Field(description="Choose this candidate")] = None,
+    status: Annotated[
+        Literal["redo", "draft"] | None,
+        Field(description="Send a page back. Only the person approves pages, in the gallery"),
+    ] = None,
+    note: Annotated[str | None, Field(description="Why, for whoever works on it next")] = None,
+) -> str:
+    """Choose a candidate for a page or send it back."""
+    return await _call(tools.set_page, page_id, image_asset_id, status, note)
+
+
+@mcp.tool(structured_output=False)
+async def check_book_sources(
+    book_id: BookId,
+    versions: Annotated[dict[str, int], Field(description="Each source node id -> its content_version now")],
+) -> str:
+    """Find pages whose source changed since they were written. Read the current versions from the work's own system
+    first: Studio cannot."""
+    return await _call(tools.check_book_sources, book_id, versions)
+
+
+@mcp.tool(structured_output=False)
+async def export_book(
+    book_id: BookId,
+    allow_draft: Annotated[bool, Field(description="Include pages nobody approved; for a proof")] = False,
+) -> str:
+    """Queue the book's PDF: real text under each picture, a cover and a colophon naming the models. Needs every page
+    approved unless allow_draft. Call get_job for the result, and pass on any license warning to the user."""
+    return await _call(tools.export_book, book_id, allow_draft)
 
 
 def main() -> None:

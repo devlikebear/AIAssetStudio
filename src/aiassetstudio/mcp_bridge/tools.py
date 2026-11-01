@@ -2,6 +2,7 @@
 
 from mcp.server.mcpserver.utilities.types import Image
 
+from ..provenance import WARN_CLASSES
 from .studio_api import StudioApi
 
 MAX_PREVIEWS = 8
@@ -116,6 +117,38 @@ def _animation_text(a: dict) -> str:
     return "\n".join(lines)
 
 
+def _book_export_text(a: dict) -> str:
+    m = a["meta"]
+    lines = [f"asset {a['id']} book_export: {len(m.get('pages', []))} pages as {m.get('format', 'pdf').upper()}"]
+    if unapproved := m.get("unapproved_pages"):
+        lines.append(f"  includes pages nobody approved: {unapproved}")
+    lines += [f"  warning: {w}" for w in m.get("warnings", [])]
+    return "\n".join(lines)
+
+
+def _page_line(p: dict) -> str:
+    refs = ", ".join(r.get("label") or r["node_id"] for r in p["source_refs"])
+    line = f"page {p['number']} [{p['status']}] {len(p['candidates'])} pictures, chosen {p['image_asset_id'] or 'none'}"
+    line += f"; rests on {refs}" if refs else "; NO SOURCE RECORDED"
+    if p["note"]:
+        line += f"\n  the person asks: {p['note']}"
+    return line
+
+
+def _book_text(api: StudioApi, book: dict) -> str:
+    done = book["counts"].get("approved", 0)
+    lines = [f"book {book['id']} [{book['project']}] {book['title']}: {done}/{len(book['pages'])} pages approved"]
+    if book["license_class"] in WARN_CLASSES:
+        lines.append(f"  license of the chosen pictures: {book['license_class']}; tell the user before they share it")
+    lines += [
+        f"  sheet {s['id']} {s['kind']} {s['name']}: {'has a picture' if s['asset'] else 'words only'}"
+        for s in book["sheets"]
+    ]
+    lines += [_page_line(p) for p in book["pages"]]
+    lines.append(f"Review: {api.base_url}/#/books/{book['id']}")
+    return "\n".join(lines)
+
+
 def _asset_line(a: dict) -> str:
     return f"asset {a['id']} {a['kind']} seed={a['seed']} status={a['status']} job={a['job_id']}"
 
@@ -225,6 +258,8 @@ async def get_job(api: StudioApi, job_id: str, wait_seconds: int = 30) -> list[s
             continue
         if a["kind"] == "animation":
             out.append(_animation_text(a))
+        elif a["kind"] == "book_export":
+            out.append(_book_export_text(a))
         else:
             out.append(f"asset {a['id']} seed={a['seed']} status={a['status']}{_pixel_note(a['meta'])}")
         if "preview" in a["files"]:
@@ -242,6 +277,10 @@ async def get_job(api: StudioApi, job_id: str, wait_seconds: int = 30) -> list[s
             "them in the gallery. To use one: set_asset_status(asset_id, 'selected'), then export_asset(asset_id, "
             "name=...) writes <name>.png (the frames in one row), <name>/000.png-009.png and <name>.json."
         )
+    elif any(a["kind"] == "page_image" for a in assets):
+        out.append(f"See the whole book with get_book(book_id='{assets[0]['meta']['book_id']}').")
+    elif any(a["kind"] == "book_export" for a in assets):
+        out.append("export_asset(asset_id, dest_dir=..., name=...) copies the PDF out of the studio.")
     elif assets:
         out.append("To use one: set_asset_status(asset_id, 'selected'), then export_asset(asset_id).")
     out.append(f"Gallery: {api.base_url}/#/jobs/{job_id}")
@@ -310,3 +349,85 @@ async def cancel_job(api: StudioApi, job_id: str) -> str:
     job = await api.cancel_job(job_id)
     note = "" if job["status"] == "cancelled" else " (it had already finished, so nothing was cancelled)"
     return _job_line(job) + note
+
+
+async def create_book(
+    api: StudioApi,
+    project: str,
+    title: str,
+    source: dict | None = None,
+    width: int | None = None,
+    height: int | None = None,
+) -> str:
+    return "Created book\n" + _book_text(api, await api.create_book(project, title, source, width=width, height=height))
+
+
+async def get_book(api: StudioApi, book_id: str) -> list[str | Image]:
+    """The book in text, with a preview of each chosen picture still waiting for the person (up to MAX_PREVIEWS)."""
+    book = await api.get_book(book_id)
+    out: list[str | Image] = [_book_text(api, book)]
+    waiting = [p for p in book["pages"] if p["status"] == "candidate" and p["image_asset_id"]]
+    for page in waiting[:MAX_PREVIEWS]:
+        out.append(f"page {page['number']}, asset {page['image_asset_id']}")
+        out.append(Image(data=await api.get_file(page["image_asset_id"], "preview"), format="png"))
+    if len(waiting) > MAX_PREVIEWS:
+        out.append(f"{len(waiting) - MAX_PREVIEWS} more pictures are only in the gallery.")
+    return out
+
+
+async def set_book_pages(api: StudioApi, book_id: str, pages: list[dict]) -> str:
+    return "Saved pages\n" + _book_text(api, await api.save_pages(book_id, pages))
+
+
+async def set_book_sheets(api: StudioApi, book_id: str, sheets: list[dict]) -> str:
+    return "Saved sheets\n" + _book_text(api, await api.save_sheets(book_id, sheets))
+
+
+async def set_book_terms(api: StudioApi, book_id: str, terms: list[dict]) -> str:
+    return f"The book now has {len(await api.set_terms(book_id, terms))} terms."
+
+
+async def set_book_cover(api: StudioApi, book_id: str, page: int) -> str:
+    return "Set the cover\n" + _book_text(api, await api.update_book(book_id, cover_page=page))
+
+
+async def generate_pages(api: StudioApi, book_id: str, pages: list[int] | None = None, seed: int | None = None) -> str:
+    job_ids = await api.generate_pages(book_id, pages, seed)
+    return (
+        f"Queued {len(job_ids)} pages: {', '.join(job_ids)}. About 30 s each; the first after a pause takes longer. "
+        f"Follow them with get_job(job_id, wait_seconds=...) or get_book(book_id='{book_id}'). Then ask the user to "
+        f"review them in the gallery: {api.base_url}/#/books/{book_id}"
+    )
+
+
+async def generate_sheet(api: StudioApi, sheet_id: str, seed: int | None = None) -> str:
+    job_id = await api.generate_sheet(sheet_id, seed)
+    return f"Queued job {job_id} for the sheet's picture. Call get_job(job_id='{job_id}', wait_seconds=60) to see it."
+
+
+async def set_page(
+    api: StudioApi,
+    page_id: str,
+    image_asset_id: str | None = None,
+    status: str | None = None,
+    note: str | None = None,
+) -> str:
+    fields = {"image_asset_id": image_asset_id, "status": status, "note": note}
+    page = await api.update_page(page_id, **{k: v for k, v in fields.items() if v is not None})
+    return _page_line(page)
+
+
+async def check_book_sources(api: StudioApi, book_id: str, versions: dict[str, int]) -> str:
+    stale = await api.check_sources(book_id, versions)
+    if not stale:
+        return "Every page rests on the current text."
+    return "\n".join(
+        f"page {s['number']}: {s['label'] or s['node_id']} was version {s['was']}, "
+        f"now {s['now'] if s['now'] is not None else 'not listed'}"
+        for s in stale
+    )
+
+
+async def export_book(api: StudioApi, book_id: str, allow_draft: bool = False) -> str:
+    job_id = await api.export_book(book_id, allow_draft)
+    return f"Queued job {job_id}. Call get_job(job_id='{job_id}', wait_seconds=30) for the PDF and any warnings."
