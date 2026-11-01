@@ -12,9 +12,9 @@ CLI가 PC 환경을 점검하고 Studio를 준비한다. 갤러리의 기능 팩
 
 ## 전제 조건
 
-- [ ] Phase 1 체크포인트 통과
-- [ ] `uv`가 PATH에 있다
-- [ ] 사용자가 시험 낭독을 들었다(T2.A.1)
+- [x] Phase 1 체크포인트 통과
+- [x] `uv`가 PATH에 있다
+- [x] 사용자가 시험 낭독을 들었다(T2.A.1)
 
 ## 포함 기능
 
@@ -22,13 +22,14 @@ CLI가 PC 환경을 점검하고 Studio를 준비한다. 갤러리의 기능 팩
 2. 라이선스 동의와 기록
 3. 다운로드, 체크섬, 이어받기, 삭제
 4. 음성 사이드카와 대기열 통합
-5. 낭독 작업, 발음 사전, 화자 지정
+5. 낭독 작업과 발음 사전(낭독자 한 명)
 6. 갤러리 오디오 검수와 MP3 내보내기
 7. 환경 점검과 설치 CLI: `doctor`, `setup`, `pack`, `serve --detach`
 
 ## 이 페이즈에서 하지 않는 것
 
 - ComfyUI와 이미지·영상 팩 → Phase 3
+- 다화자 낭독 → T2.A.1 결정으로 제외. 음성 모델을 바꿀 때 다시 본다
 - 음성 복제, Whisper 자동 점검 → Next
 - 팩의 자동 업데이트 → 새 팩 버전은 다시 동의하고 설치한다
 
@@ -36,7 +37,7 @@ CLI가 PC 환경을 점검하고 Studio를 준비한다. 갤러리의 기능 팩
 
 ### 작업 그룹 A: 음성 결정 (먼저 한다)
 
-- [ ] **T2.A.1** — 사용자 청취 (수동)
+- [x] **T2.A.1** — 사용자 청취 (수동)
   - 파일: `docs/plans/notes/studio-spike-2026-11-01.md`에 결과 추가
   - 내용: 사용자가 시험 낭독 전체와 대화 샘플을 듣고 정한다.
   - 결정 규칙
@@ -44,6 +45,7 @@ CLI가 PC 환경을 점검하고 Studio를 준비한다. 갤러리의 기능 팩
     2. 낭독은 되지만 다화자 억양이 어색하면 → 단일 낭독만 MVP로 하고 T2.D.3의 화자 지정을 뺀다.
     3. 낭독 품질이 부족하면 → 멈춘다. Ming-3.0-tts, Chatterbox Multilingual V3를 같은 대본으로 시험해 고른다. 안 되면 사용자와 공정 순서를 다시 정한다.
   - 검증: 사용자 결정 기록
+  - 결과(2026-11-01): 결정 2번. 단일 낭독만 MVP로 한다.
 
 ### 작업 그룹 B: 기능 팩
 
@@ -139,8 +141,8 @@ CLI가 PC 환경을 점검하고 Studio를 준비한다. 갤러리의 기능 팩
 - [ ] **T2.D.1** — 낭독 대본과 발음 사전
   - 파일: `store/db.py`, `src/aiassetstudio/narration.py`, `tests/test_narration.py`
   - 내용:
-    - `pages`에 `narration(JSON)`, `narration_asset_id`, `narration_status`. `narration`은 `[{"speaker","text"}]`, 비어 있으면 `pages.text`를 낭독자가 읽는다.
-    - `books.voices(JSON)`: `{"narrator": {"speaker":"Sohee","instruct":"..."}}`
+    - `pages`에 `narration_asset_id`, `narration_status`. 낭독자는 `pages.text`를 읽는다.
+    - 낭독 목소리는 `narration.py`의 상수(`Sohee`와 낭독 지시)로 둔다. 책별 설정은 만들지 않는다.
     - `apply_terms(text, terms)`: 긴 용어부터 치환한다. 시험에서 성과 호칭을 붙여 쓰면 발음이 바로잡혔다. 테스트에는 작품 고유명사가 아닌 가상 값을 쓴다.
     - 화면 자막과 PDF는 치환 전 `text`를 쓴다.
   - 검증: `uv run pytest tests/test_narration.py`
@@ -149,13 +151,13 @@ CLI가 PC 환경을 점검하고 Studio를 준비한다. 갤러리의 기능 팩
   - 파일: `jobs/runners.py`, `api/app.py`, `post/audio.py`, `tests/test_runners.py`
   - 내용:
     - `POST /api/books/{id}/narrate`: 쪽마다 작업 하나, 계열 `tts`. 팩이 없으면 409와 갤러리 안내.
-    - 구간을 합쳐 쪽 WAV 하나로 저장한다. 구간 사이 0.5초, 메타에 길이와 구간별 시간.
+    - 쪽마다 WAV 하나로 저장하고 메타에 길이를 남긴다.
     - `AssetKind`에 `narration` 추가, `meta.models`에 라이선스 기록.
   - 검증: `uv run pytest tests/test_runners.py`
 
-- [ ] **T2.D.3** — 화자 지정
+- [ ] **T2.D.3** — 낭독 MCP 도구
   - 파일: `mcp_bridge/server.py`, `tools.py`
-  - 내용: `set_book_voices`, `set_page_narration`. 화자 구분은 에이전트가 하고 사람이 갤러리에서 듣고 고친다. T2.A.1 결정 2번이면 건너뛴다.
+  - 내용: `generate_narration(book_id, pages?)`. 화자 지정(`set_book_voices`, `set_page_narration`)은 T2.A.1 결정 2번으로 뺐다. 이 도구는 원래 지시서에 빠져 있던 낭독 시작 경로를 채운다.
   - 검증: `uv run pytest tests/test_mcp_tools.py`
 
 - [ ] **T2.D.4** — 듣기와 MP3 내보내기
