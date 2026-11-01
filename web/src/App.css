@@ -1436,6 +1436,10 @@ dialog::backdrop {
   width: 100%;
 }
 
+.page-body > .page-status {
+  align-self: flex-start;
+}
+
 .packs {
   display: flex;
   flex-direction: column;

@@ -464,7 +464,7 @@ async def generate_narration(
 ) -> str:
     job_ids = await api.narrate_pages(book_id, pages, seed)
     return (
-        f"Queued {len(job_ids)} pages: {', '.join(job_ids)}. About 30 s each; the first takes a minute or two longer "
+        f"Queued {len(job_ids)} pages: {', '.join(job_ids)}. About a minute each; the first takes up to a minute longer "
         f"while the speech model loads. Follow them with get_job(job_id, wait_seconds=60) or get_book(book_id="
         f"'{book_id}'). You cannot hear audio: then ask the user to listen in the gallery: "
         f"{api.base_url}/#/books/{book_id}"

@@ -28,7 +28,7 @@ class Settings:
     animation_timeout: float = 900  # seconds
     book_font: str = r"C:\Windows\Fonts\batang.ttc"  # the text of exported books; a .ttf or a .ttc, first face
     tts_port: int = 8766  # the speech pack's server, on this PC only
-    narration_timeout: float = 300  # seconds per page; a page took 25 s on average
+    narration_timeout: float = 300  # seconds per page; a 26 s page took 50 s
 
 
 # field -> (environment variable, converter)
