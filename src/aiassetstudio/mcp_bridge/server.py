@@ -310,7 +310,7 @@ async def set_book_pages(
         Field(
             description="Pages by number; pages not listed stay. Each: number, text (the page's words), image_prompt "
             "(the scene, in English), people (names of character sheets, most important first; two become references), "
-            "props (prop sheet names or plain words), place (a place sheet name or plain words), source_refs "
+            "props (prop sheet names or plain English), place (a place sheet name or plain English), source_refs "
             "[{node_id, content_version, label}]. Changing what a page shows sends it back to draft; changing only "
             "its text keeps the picture."
         ),
