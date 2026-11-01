@@ -39,6 +39,8 @@ from ..comfy.graphs import (
     yue2_song,
 )
 from ..config import Settings
+from ..narration import INSTRUCT, LANGUAGE, SPEAKER, SPEECH_MODELS, apply_terms
+from ..packs.sidecar import SidecarManager
 from ..post.animation import (
     FRAMES,
     NATIVE_CELL_FACTOR,
@@ -53,7 +55,9 @@ from ..post.animation import (
 )
 from ..post.audio import (
     AudioEncodeError,
+    concat_with_gaps,
     detect_tempo,
+    encode_mp3,
     encode_ogg,
     load_audio,
     make_loop,
@@ -102,6 +106,8 @@ ANIMATION_BASE_SIDE = 1024
 ANIMATION_ROWS_AT_ONCE = 2
 CLOUD_SENT = ["the base sprite, enlarged", "sprite-gen's layout guides", "sprite-gen's prompts"]
 
+PAGE_GAP_S = 1.2  # between pages of an audiobook, as in the 2026-11-01 trial
+
 
 class JobCancelled(Exception):
     """Raised by a runner that sees the job was cancelled between steps."""
@@ -117,6 +123,7 @@ class RunContext:
     prompt_ids: list[str] = field(default_factory=list)
     # Set by the queue when it freed ComfyUI's memory before this job (another model family was loaded).
     freed_before: bool = False
+    sidecar: SidecarManager | None = None  # the speech pack's server, up when a narration job runs
 
 
 def effective_icon_size(project: Project) -> int | None:
@@ -610,6 +617,52 @@ async def run_page_image_job(ctx: RunContext, job: Job) -> None:
         ctx.db.update_page(page.id, status="candidate", image_asset_id=current.image_asset_id or asset_id)
 
 
+async def run_narration_job(ctx: RunContext, job: Job) -> None:
+    """One take of one page, read by the narrator. A new take joins the page's takes; a choice already made stays."""
+    params = dict(job.params)
+    if params.get("seed") is None:
+        params["seed"] = random.randrange(2**31)
+        ctx.db.update_job(job.id, params=params)
+    seed = int(params["seed"])
+    project = ctx.db.get_project(job.project)
+    page = ctx.db.get_page(params["page_id"])
+    spoken = apply_terms(page.text, ctx.db.list_terms(page.book_id))
+    asset_id = new_id()
+    directory = asset_dir(ctx.settings, project.slug, asset_id)
+    ctx.db.update_job(job.id, stage="speaking")
+    body = {
+        "text": spoken,
+        "speaker": SPEAKER,
+        "instruct": INSTRUCT,
+        "language": LANGUAGE,
+        "seed": seed,
+        "out_path": str(directory / "narration.wav"),
+    }
+    result = await ctx.sidecar.speak(body, ctx.settings.narration_timeout)
+    meta = {
+        "book_id": page.book_id,
+        "narration_page_id": page.id,  # not page_id: that key finds a page's pictures
+        "page_number": page.number,
+        "description": params["description"],
+        "text": page.text,
+        "spoken_text": spoken,
+        "speaker": SPEAKER,
+        "instruct": INSTRUCT,
+        "seed": seed,
+        "workflow": "qwen3_tts_custom_voice",
+        "models": SPEECH_MODELS,
+        "licenses": license_records(SPEECH_MODELS),
+        "length_s": result["duration_s"],
+        "sample_rate": result["sample_rate"],
+        "timings": {k: result[k] for k in ("generate_s", "peak_vram_gb") if k in result},
+    }
+    files = {"wav": to_rel(ctx.settings, directory / "narration.wav")}
+    ctx.db.create_asset(job.id, job.project_id, "narration", files=files, meta=meta, seed=seed, asset_id=asset_id)
+    ctx.db.update_job(job.id, timings=meta["timings"])
+    current = ctx.db.get_page(page.id)
+    ctx.db.update_page(page.id, narration_status="candidate", narration_asset_id=current.narration_asset_id or asset_id)
+
+
 def _page_picture(ctx: RunContext, page: Page) -> Path:
     asset = ctx.db.get_asset(page.image_asset_id)
     path = from_rel(ctx.settings, asset.files["processed"]) if asset is not None else None
@@ -628,10 +681,55 @@ def _colophon(book: Book, records: list[dict]) -> list[str]:
     return lines
 
 
+async def _export_mp3(ctx: RunContext, job: Job, project: Project, book: Book) -> None:
+    """The chosen takes end to end. meta["page_starts"] says where each page begins, for subtitles."""
+    pages = [p for p in ctx.db.list_pages(book.id) if p.narration_asset_id]
+    if not pages:
+        raise ValueError(f"book {book.id} has no page with a chosen narration")
+    t0 = time.monotonic()
+    takes = [ctx.db.get_asset(p.narration_asset_id) for p in pages]
+    paths = [from_rel(ctx.settings, take.files["wav"]) for take in takes]
+    if missing := [p.number for p, path in zip(pages, paths, strict=True) if not path.is_file()]:
+        raise FileNotFoundError(f"the narration of pages {missing} is missing")
+    records = list({r["file"]: r for take in takes for r in take.meta.get("licenses", [])}.values())
+    asset_id = new_id()
+    directory = asset_dir(ctx.settings, project.slug, asset_id)
+    ctx.db.update_job(job.id, stage="joining pages")
+    starts = await asyncio.to_thread(concat_with_gaps, paths, directory / "joined.wav", PAGE_GAP_S)
+    ctx.db.update_job(job.id, stage="encoding")
+    await asyncio.to_thread(encode_mp3, directory / "joined.wav", directory / "book.mp3", ctx.settings.ffmpeg)
+    (directory / "joined.wav").unlink()
+    worst = worst_class(records)
+    warnings = []
+    if worst in WARN_CLASSES:
+        warnings.append(f"license: {'; '.join(license_names(records))}. Check it before sharing or selling this book.")
+    meta = {
+        "book_id": book.id,
+        "description": book.title,
+        "format": "mp3",
+        "pages": [p.number for p in pages],
+        "unapproved_pages": [p.number for p in pages if p.narration_status != "approved"],
+        "page_starts": [
+            {"page": p.number, "start_s": start, "length_s": length}
+            for p, (start, length) in zip(pages, starts, strict=True)
+        ],
+        "licenses": records,
+        "license_class": worst,
+        "warnings": warnings,
+    }
+    files = {"mp3": to_rel(ctx.settings, directory / "book.mp3")}
+    ctx.db.create_asset(job.id, job.project_id, "book_export", files=files, meta=meta, asset_id=asset_id)
+    ctx.db.update_job(job.id, timings={"export": round(time.monotonic() - t0, 2)})
+
+
 async def run_book_export_job(ctx: RunContext, job: Job) -> None:
-    """The book's chosen pictures and text as a PDF; a job so that it shares the queue, the status and the gallery."""
+    """The book as a PDF of its chosen pictures and text, or an MP3 of its chosen narration; a job so that it shares
+    the queue, the status and the gallery."""
     project = ctx.db.get_project(job.project)
     book = ctx.db.get_book(job.params["book_id"])
+    if job.params.get("format") == "mp3":
+        await _export_mp3(ctx, job, project, book)
+        return
     pages = [p for p in ctx.db.list_pages(book.id) if p.image_asset_id]
     if not pages:
         raise ValueError(f"book {book.id} has no page with a chosen picture")
@@ -686,5 +784,6 @@ RUNNERS = {
     "bgm": run_bgm_job,
     "animation": run_animation_job,
     "page_image": run_page_image_job,
+    "narration": run_narration_job,
     "book_export": run_book_export_job,
 }

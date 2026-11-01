@@ -39,7 +39,13 @@ source_refs naming the scenes it rests on with their content_version -> generate
 gallery; only they approve -> get_book shows their redo notes -> fix the prompt, generate_pages again -> export_book.
 Writing image_prompt, in English: say how many people are in the picture. Turn a person so the trait that matters can
 be seen. Give minor characters their own look and keep them small, or they take on a reference's face. Name a prop's
-shape and make it large enough to read. A small color detail may not hold; say so to the user rather than retrying."""
+shape and make it large enough to read. A small color detail may not hold; say so to the user rather than retrying.
+
+For an audiobook of that book: list_packs shows whether the speech pack is installed. If a pack is missing, ask the
+person to agree to its license in the gallery; it installs there or with `aiassetstudio pack install <id>`. You cannot
+agree or install from here. set_book_terms for names a narrator misreads -> generate_narration -> ask the user to listen
+in the gallery; only they approve -> get_book shows their notes -> change the text or terms, generate_narration(pages)
+-> export_book(format="mp3")."""
 
 mcp = MCPServer("aiassetstudio", instructions=INSTRUCTIONS)
 _api: StudioApi | None = None
@@ -238,7 +244,7 @@ async def get_job(
 async def list_assets(
     project: Slug,
     kind: Annotated[
-        Literal["sprite", "icon", "bgm", "animation", "page_image", "book_export"] | None,
+        Literal["sprite", "icon", "bgm", "animation", "page_image", "narration", "book_export"] | None,
         Field(description="Only this kind"),
     ] = None,
     status: Annotated[
@@ -340,7 +346,7 @@ async def set_book_terms(
     book_id: BookId,
     terms: Annotated[list[dict], Field(description="Each: term, spoken (how to write it so a narrator says it right)")],
 ) -> str:
-    """Replace the book's list of pronunciations, kept for narration."""
+    """Replace the book's list of pronunciations. Narration reads each term as spoken; the PDF keeps the page's text."""
     return await _call(tools.set_book_terms, book_id, terms)
 
 
@@ -401,10 +407,30 @@ async def check_book_sources(
 async def export_book(
     book_id: BookId,
     allow_draft: Annotated[bool, Field(description="Include pages nobody approved; for a proof")] = False,
+    format: Annotated[Literal["pdf", "mp3"], Field(description="pdf: the book; mp3: its narration")] = "pdf",
 ) -> str:
-    """Queue the book's PDF: real text under each picture, a cover and a colophon naming the models. Needs every page
-    approved unless allow_draft. Call get_job for the result, and pass on any license warning to the user."""
-    return await _call(tools.export_book, book_id, allow_draft)
+    """Queue the book's PDF (real text under each picture, a cover and a colophon naming the models) or its narration
+    as one MP3. Needs every page's picture, or narration, approved unless allow_draft. Call get_job for the result, and
+    pass on any license warning to the user."""
+    return await _call(tools.export_book, book_id, allow_draft, format)
+
+
+@mcp.tool(structured_output=False)
+async def generate_narration(
+    book_id: BookId,
+    pages: Annotated[list[int] | None, Field(description="Page numbers; omit for every page in draft or redo")] = None,
+    seed: Annotated[int | None, Field(ge=0, description="Random per page if omitted")] = None,
+) -> str:
+    """Queue a narrator reading each page's text, with the book's terms applied. Needs the speech pack. A new take joins
+    the page's takes; the choice already made stays. You cannot hear audio: ask the user to listen in the gallery."""
+    return await _call(tools.generate_narration, book_id, pages, seed)
+
+
+@mcp.tool(structured_output=False)
+async def list_packs() -> str:
+    """Show the feature packs (the speech pack for audiobooks), whether each is installed, and the gallery link where a
+    person agrees to its license. Installing is not done from here."""
+    return await _call(tools.list_packs)
 
 
 def main() -> None:

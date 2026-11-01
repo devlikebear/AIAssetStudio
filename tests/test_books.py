@@ -11,7 +11,7 @@ from pypdf import PdfReader
 
 from aiassetstudio.api.app import create_app
 from aiassetstudio.comfy.graphs import QWEN_BOOK_UNET
-from aiassetstudio.store.db import Database
+from aiassetstudio.store.db import SCHEMA_VERSION, Database
 
 KOREAN_FONT = Path(r"C:\Windows\Fonts\batang.ttc")
 PAGE = {"text": "Some text.", "image_prompt": "A scene."}
@@ -345,8 +345,43 @@ def test_version_2_database_upgrades(tmp_path):
     conn.executescript("CREATE TABLE projects (id INTEGER PRIMARY KEY, slug TEXT); PRAGMA user_version = 2;")
     conn.close()
     db = Database(path)
-    assert db.schema_version() == 3
+    assert db.schema_version() == SCHEMA_VERSION
     assert db.list_books() == []
+    db.close()
+
+
+def test_version_3_database_keeps_its_pages(tmp_path):
+    """The step that adds packs and narration, on a book made by the version before it."""
+    path = tmp_path / "studio.db"
+    db = Database(path)
+    project = db.create_project("demo", "Demo")
+    book = db.create_book(project.id, "t", None, 1184, 880)
+    db.save_pages(book.id, [{"number": 1, "text": "a"}])
+    db._conn.executescript(
+        "DROP TABLE pack_consents; DROP TABLE pack_installs; ALTER TABLE pages DROP COLUMN narration_asset_id;"
+        "ALTER TABLE pages DROP COLUMN narration_status; ALTER TABLE pages DROP COLUMN narration_note;"
+        "PRAGMA user_version = 3;"
+    )
+    db.close()
+    db = Database(path)
+    assert db.schema_version() == SCHEMA_VERSION
+    [page] = db.list_pages(book.id)
+    assert (page.text, page.narration_status, page.narration_asset_id) == ("a", "draft", None)
+    assert db.get_install("speech-ko") is None
+    db.close()
+
+
+def test_a_new_text_sends_the_narration_back_and_keeps_the_picture(tmp_path):
+    db = Database(tmp_path / "studio.db")
+    project = db.create_project("demo", "Demo")
+    book = db.create_book(project.id, "t", None, 1184, 880)
+    [page] = db.save_pages(book.id, [{"number": 1, "text": "a", "image_prompt": "p"}])
+    db.update_page(
+        page.id, status="approved", image_asset_id="pic", narration_status="approved", narration_asset_id="n"
+    )
+    [page] = db.save_pages(book.id, [{"number": 1, "text": "b"}])
+    assert (page.status, page.image_asset_id) == ("approved", "pic")
+    assert (page.narration_status, page.narration_asset_id) == ("draft", None)
     db.close()
 
 

@@ -27,6 +27,8 @@ class Settings:
     codex_dir: str = ""  # folder of the codex CLI for sprite-gen; empty = find_codex_dir's search
     animation_timeout: float = 900  # seconds
     book_font: str = r"C:\Windows\Fonts\batang.ttc"  # the text of exported books; a .ttf or a .ttc, first face
+    tts_port: int = 8766  # the speech pack's server, on this PC only
+    narration_timeout: float = 300  # seconds per page; a page took 25 s on average
 
 
 # field -> (environment variable, converter)
@@ -45,6 +47,8 @@ _ENV = {
     "codex_dir": ("AIAS_CODEX_DIR", str),
     "animation_timeout": ("AIAS_ANIMATION_TIMEOUT", float),
     "book_font": ("AIAS_BOOK_FONT", str),
+    "tts_port": ("AIAS_TTS_PORT", int),
+    "narration_timeout": ("AIAS_NARRATION_TIMEOUT", float),
 }
 
 

@@ -148,6 +148,8 @@ async def test_server_registers_every_tool():
         "set_page",
         "check_book_sources",
         "export_book",
+        "generate_narration",
+        "list_packs",
     }
     reference = listed["update_project"].input_schema["properties"]["reference_image"]
     assert "must be an absolute path; it is copied into the studio" in reference["description"]
@@ -233,7 +235,7 @@ async def test_bgm_tool_description():
         " ".join(listed["generate_bgm"].description.split())
     )
     kinds = listed["list_assets"].input_schema["properties"]["kind"]["anyOf"][0]["enum"]
-    assert kinds == ["sprite", "icon", "bgm", "animation", "page_image", "book_export"]
+    assert kinds == ["sprite", "icon", "bgm", "animation", "page_image", "narration", "book_export"]
 
 
 async def test_animation_tool_description():
@@ -276,3 +278,24 @@ async def test_animation_flow(animation_api, tmp_path):
         str(tmp_path / "Game" / "shadow_anim.json"),
         str(tmp_path / "Game" / "shadow_anim"),
     ]
+
+
+async def test_list_packs_says_who_must_act(api):
+    text = await tools.list_packs(api)
+    assert "speech-ko" in text
+    assert "not_installed" in text
+    assert "a person must agree to Apache License 2.0 in the gallery" in text
+    assert "/#/packs/speech-ko" in text
+
+
+async def test_the_server_has_no_tool_to_agree_or_install():
+    listed = {t.name for t in await server.mcp.list_tools()}
+    assert not {name for name in listed if "accept" in name or "install" in name or "remove" in name}
+
+
+async def test_narrating_without_the_pack_says_where_to_go(api):
+    await api.create_project("demo", "Demo")
+    book = await api.create_book("demo", "t", None)
+    await api.save_pages(book["id"], [{"number": 1, "text": "글"}])
+    with pytest.raises(BackendError, match="/#/packs/speech-ko"):
+        await tools.generate_narration(api, book["id"])

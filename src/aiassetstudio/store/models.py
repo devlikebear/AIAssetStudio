@@ -4,14 +4,16 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-JobKind = Literal["image", "bgm", "animation", "page_image", "book_export"]
-# qwen_turbo: the official Turbo checkpoint of books; codex: cloud, no GPU; none: on this PC, no GPU
-Family = Literal["qwen", "qwen_turbo", "ace", "yue2", "codex", "none"]
+JobKind = Literal["image", "bgm", "animation", "page_image", "narration", "book_export"]
+# qwen_turbo: the official Turbo checkpoint of books; tts: the speech pack's sidecar; codex: cloud, no GPU;
+# none: on this PC, no GPU
+Family = Literal["qwen", "qwen_turbo", "ace", "yue2", "tts", "codex", "none"]
 JobStatus = Literal["queued", "running", "done", "failed", "cancelled"]
-AssetKind = Literal["sprite", "icon", "bgm", "animation", "page_image", "book_export"]
+AssetKind = Literal["sprite", "icon", "bgm", "animation", "page_image", "narration", "book_export"]
 AssetStatus = Literal["candidate", "selected", "rejected"]
 PageStatus = Literal["draft", "queued", "candidate", "approved", "redo"]
 SheetKind = Literal["character", "place", "prop"]
+PackInstallStatus = Literal["installing", "installed", "failed", "cancelled"]
 
 TERMINAL_STATUSES: tuple[JobStatus, ...] = ("done", "failed", "cancelled")
 
@@ -92,6 +94,9 @@ class Page(BaseModel):
     image_asset_id: str | None = None  # the chosen picture
     status: PageStatus = "draft"
     note: str | None = None  # the person's request for a redo, for the agent to read
+    narration_asset_id: str | None = None  # the chosen take
+    narration_status: PageStatus = "draft"  # reviewed apart from the picture: one can be approved alone
+    narration_note: str | None = None
     created_at: str
     updated_at: str
 
@@ -111,3 +116,23 @@ class Sheet(BaseModel):
 class Term(BaseModel):
     term: str
     spoken: str  # how to write it so the narrator says it right
+
+
+class PackConsent(BaseModel):
+    """A person agreed to this exact license text for this version of a pack."""
+
+    pack_id: str
+    pack_version: str
+    license_id: str
+    license_sha256: str
+    accepted_at: str
+
+
+class PackInstall(BaseModel):
+    pack_id: str
+    version: str
+    status: PackInstallStatus
+    stage: str | None = None
+    error: str | None = None
+    files: list[str] = []  # paths inside the pack's folder that the install made, all that a removal deletes
+    installed_at: str | None = None

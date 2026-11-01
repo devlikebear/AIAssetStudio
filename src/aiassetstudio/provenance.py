@@ -16,6 +16,7 @@ from .comfy.graphs import (
     VIGGLE_LORA,
     YUE2_CKPT,
 )
+from .narration import SPEECH_MODEL
 
 LicenseClass = Literal["open", "community", "unknown", "research_only"]
 # Worst first. "unknown" outranks "community": nobody has read its terms.
@@ -44,6 +45,7 @@ MODEL_LICENSES: dict[str, ModelLicense] = {
     ACE_TE_LARGE: _ACE,
     ACE_VAE: _ACE,
     YUE2_CKPT: ModelLicense("YuE2", "YuE2 model license", "community"),
+    SPEECH_MODEL: ModelLicense("Qwen3-TTS", "Apache License 2.0", "open"),
 }
 _UNLISTED = ModelLicense("unlisted model", "not recorded", "unknown")
 

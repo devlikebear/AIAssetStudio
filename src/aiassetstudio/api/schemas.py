@@ -195,6 +195,9 @@ class PageUpdate(BaseModel):
     status: Literal["approved", "redo", "draft"] | None = None
     note: LongText | None = None
     image_asset_id: str | None = None
+    narration_status: Literal["approved", "redo", "draft"] | None = None
+    narration_note: LongText | None = None
+    narration_asset_id: str | None = None
 
 
 class GeneratePages(BaseModel):
@@ -223,12 +226,13 @@ class StalePage(BaseModel):
 
 
 class BookExportRequest(BaseModel):
-    format: Literal["pdf"] = "pdf"
-    allow_draft: bool = False  # lay out pages that were not approved
+    format: Literal["pdf", "mp3"] = "pdf"
+    allow_draft: bool = False  # include pages that were not approved
 
 
 class PageOut(Page):
     candidates: list[AssetOut] = Field(default_factory=list)
+    narration_candidates: list[AssetOut] = Field(default_factory=list)
 
 
 class SheetOut(Sheet):
@@ -240,4 +244,35 @@ class BookOut(Book):
     sheets: list[SheetOut]
     terms: list[Term]
     counts: dict[str, int]  # page status -> pages
+    narration_counts: dict[str, int]  # narration status -> pages
     license_class: str | None  # of the chosen pictures; None until one is chosen
+
+
+class PackAccept(BaseModel):
+    licenses: list[str]  # the ids a person ticked
+
+
+class PackLicenseOut(BaseModel):
+    id: str
+    name: str
+    class_: str
+    url: str
+    summary_ko: str
+    accepted: bool
+
+
+class PackOut(BaseModel):
+    id: str
+    title: str
+    feature: str
+    version: str
+    download_size: int
+    tested: dict
+    gated: bool
+    licenses: list[PackLicenseOut]
+    status: str  # not_installed, or the install's: installing, installed, failed, cancelled
+    stage: str | None
+    error: str | None
+    license_changed: bool  # the text online differs from what the catalog holds; a new Studio version must follow it
+    installed_version: str | None
+    log_tail: str

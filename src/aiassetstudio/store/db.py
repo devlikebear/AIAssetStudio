@@ -7,9 +7,9 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .models import Asset, Book, Job, Page, Project, Sheet, Term
+from .models import Asset, Book, Job, PackConsent, PackInstall, Page, Project, Sheet, Term
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _BOOK_TABLES = """
 CREATE TABLE books (
@@ -57,6 +57,32 @@ CREATE TABLE terms (
     spoken TEXT NOT NULL,
     PRIMARY KEY (book_id, term)
 );
+"""
+
+_PACK_TABLES = """
+CREATE TABLE pack_consents (
+    pack_id TEXT NOT NULL,
+    pack_version TEXT NOT NULL,
+    license_id TEXT NOT NULL,
+    license_sha256 TEXT NOT NULL,
+    accepted_at TEXT NOT NULL,
+    PRIMARY KEY (pack_id, pack_version, license_id, license_sha256)
+);
+CREATE TABLE pack_installs (
+    pack_id TEXT PRIMARY KEY,
+    version TEXT NOT NULL,
+    status TEXT NOT NULL,
+    stage TEXT,
+    error TEXT,
+    files TEXT NOT NULL DEFAULT '[]',
+    installed_at TEXT
+);
+"""
+
+_NARRATION_COLUMNS = """
+ALTER TABLE pages ADD COLUMN narration_asset_id TEXT;
+ALTER TABLE pages ADD COLUMN narration_status TEXT NOT NULL DEFAULT 'draft';
+ALTER TABLE pages ADD COLUMN narration_note TEXT;
 """
 
 _SCHEMA = (
@@ -109,6 +135,8 @@ CREATE INDEX assets_job ON assets(job_id);
 CREATE INDEX assets_project ON assets(project_id, kind, status);
 """
     + _BOOK_TABLES
+    + _PACK_TABLES
+    + _NARRATION_COLUMNS
 )
 
 # version -> the SQL that takes a database of that version one step up. SQLite adds a NOT NULL column with a
@@ -116,6 +144,7 @@ CREATE INDEX assets_project ON assets(project_id, kind, status);
 _UPGRADES = {
     1: "ALTER TABLE projects ADD COLUMN animation_cloud INTEGER NOT NULL DEFAULT 0;",
     2: _BOOK_TABLES,
+    3: _PACK_TABLES + _NARRATION_COLUMNS,
 }
 
 PROJECT_FIELDS = (
@@ -133,9 +162,10 @@ PROJECT_FIELDS = (
 )
 JOB_FIELDS = ("params", "status", "stage", "error", "timings", "started_at", "finished_at")
 PAGE_FIELDS = ("text", "image_prompt", "people", "props", "place", "source_refs")
-PAGE_STATE_FIELDS = ("status", "note", "image_asset_id")
+PAGE_STATE_FIELDS = ("status", "note", "image_asset_id", "narration_status", "narration_note", "narration_asset_id")
 # A change to one of these makes the chosen picture out of date. `text` is not one: the picture still fits.
 PAGE_PICTURE_FIELDS = ("image_prompt", "people", "props", "place")
+PACK_INSTALL_FIELDS = ("version", "status", "stage", "error", "files", "installed_at")
 _JSON_FIELDS = {"palette", "params", "timings", "files", "meta", "source", "people", "props", "source_refs"}
 
 _JOB_SELECT = "SELECT jobs.*, projects.slug AS project FROM jobs JOIN projects ON projects.id = jobs.project_id"
@@ -398,7 +428,8 @@ class Database:
 
     def save_pages(self, book_id: str, pages: list[dict]) -> list[Page]:
         """Add or change pages by number; pages not listed stay. A change to what a page shows sends it back to draft
-        and drops the chosen picture (its candidates stay on the page); a change to its text does not."""
+        and drops the chosen picture (its candidates stay on the page); a change to its text does the same to the
+        narration, which no longer says what the page says."""
         existing = {p.number: p for p in self.list_pages(book_id)}
         with self._lock, self._conn:
             for page in pages:
@@ -424,6 +455,8 @@ class Database:
                     continue
                 if any(f in changes for f in PAGE_PICTURE_FIELDS):
                     changes |= {"status": "draft", "image_asset_id": None}
+                if "text" in changes:
+                    changes |= {"narration_status": "draft", "narration_asset_id": None}
                 changes["updated_at"] = ts
                 sets = ", ".join(f"{k} = ?" for k in changes)
                 self._conn.execute(
@@ -447,6 +480,17 @@ class Database:
             " updated_at = ? WHERE status = 'queued' AND id NOT IN ("
             "SELECT json_extract(params, '$.page_id') FROM jobs WHERE kind = 'page_image'"
             " AND status IN ('queued', 'running') AND json_extract(params, '$.page_id') IS NOT NULL)" + clause,
+            args,
+        )
+
+    def release_idle_narration(self, book_id: str | None = None) -> None:
+        """The same for narration: pages queued for a narration job that is gone."""
+        clause, args = (" AND book_id = ?", (now(), book_id)) if book_id is not None else ("", (now(),))
+        self._write(
+            "UPDATE pages SET narration_status = CASE WHEN narration_asset_id IS NULL THEN 'draft' ELSE 'candidate' END,"
+            " updated_at = ? WHERE narration_status = 'queued' AND id NOT IN ("
+            "SELECT json_extract(params, '$.page_id') FROM jobs WHERE kind = 'narration'"
+            " AND status IN ('queued', 'running'))" + clause,
             args,
         )
 
@@ -495,3 +539,45 @@ class Database:
                 [(book_id, t["term"], t["spoken"]) for t in terms],
             )
         return self.list_terms(book_id)
+
+    # --- feature packs --------------------------------------------------------------------------
+
+    def add_consent(self, pack_id: str, version: str, license_id: str, license_sha256: str) -> None:
+        self._write(
+            "INSERT OR IGNORE INTO pack_consents (pack_id, pack_version, license_id, license_sha256, accepted_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (pack_id, version, license_id, license_sha256, now()),
+        )
+
+    def list_consents(self, pack_id: str) -> list[PackConsent]:
+        rows = self._all("SELECT * FROM pack_consents WHERE pack_id = ? ORDER BY accepted_at", (pack_id,))
+        return [PackConsent(**dict(r)) for r in rows]
+
+    def get_install(self, pack_id: str) -> PackInstall | None:
+        row = self._one("SELECT * FROM pack_installs WHERE pack_id = ?", (pack_id,))
+        return PackInstall(**_decode(row)) if row else None
+
+    def save_install(self, pack_id: str, **fields) -> PackInstall:
+        """Add the pack's row, or change the fields given."""
+        _check_fields(fields, PACK_INSTALL_FIELDS)
+        if self.get_install(pack_id) is None:
+            cols = ["pack_id", *fields]
+            marks = ", ".join("?" * len(cols))
+            values = [pack_id, *(_encode(k, v) for k, v in fields.items())]
+            self._write(f"INSERT INTO pack_installs ({', '.join(cols)}) VALUES ({marks})", values)
+        elif fields:
+            sets = ", ".join(f"{k} = ?" for k in fields)
+            values = [*(_encode(k, v) for k, v in fields.items()), pack_id]
+            self._write(f"UPDATE pack_installs SET {sets} WHERE pack_id = ?", values)
+        return self.get_install(pack_id)
+
+    def delete_install(self, pack_id: str) -> None:
+        self._write("DELETE FROM pack_installs WHERE pack_id = ?", (pack_id,))
+
+    def mark_stale_installs_failed(self) -> int:
+        """An install left running by a previous backend process stopped with it; its partial files stay to resume."""
+        cur = self._write(
+            "UPDATE pack_installs SET status = 'failed', stage = NULL, error = 'interrupted by restart'"
+            " WHERE status = 'installing'"
+        )
+        return cur.rowcount

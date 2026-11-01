@@ -20,6 +20,9 @@ from .graphs import (
     YUE2_CKPT,
 )
 
+# The API graphs were verified on this ComfyUI version; node names can change on update.
+VERIFIED_COMFYUI = "0.37.0"
+
 
 @dataclass(frozen=True)
 class Requirement:

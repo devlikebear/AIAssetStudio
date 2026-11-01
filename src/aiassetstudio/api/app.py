@@ -8,6 +8,7 @@ import json
 import logging
 import shutil
 import time
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
@@ -26,11 +27,27 @@ from ..comfy.launcher import ComfyLauncher
 from ..config import REPO_ROOT, Settings
 from ..jobs.queue import JobQueue
 from ..jobs.runners import RUNNERS
+from ..narration import SPEECH_PACK
+from ..packs.catalog import PackSpec
+from ..packs.consent import ConsentRequired, accept, missing_consents
+from ..packs.manager import InsufficientDisk, PackError, PackManager
+from ..packs.sidecar import SidecarManager
 from ..provenance import worst_class
 from ..spritegen.access import animation_status
 from ..store.db import Database, DuplicateSlug, now
 from ..store.files import db_path, export_stem, from_rel, unique_stem
-from ..store.models import TERMINAL_STATUSES, Asset, AssetKind, AssetStatus, Book, Job, JobStatus, Project, Term
+from ..store.models import (
+    TERMINAL_STATUSES,
+    Asset,
+    AssetKind,
+    AssetStatus,
+    Book,
+    Job,
+    JobStatus,
+    Page,
+    Project,
+    Term,
+)
 from ..store.reference import ReferenceImageError, load_reference, store_reference
 from .schemas import (
     AnimationJobCreate,
@@ -50,6 +67,9 @@ from .schemas import (
     JobCreated,
     JobOut,
     JobsCreated,
+    PackAccept,
+    PackLicenseOut,
+    PackOut,
     PageIn,
     PageOut,
     PageUpdate,
@@ -76,7 +96,8 @@ EXPORT_FILES = {
     "icon": (("processed",),),
     "bgm": (("loop_wav", "loop_ogg"), ("full_wav", "full_ogg")),
     "page_image": (("processed",),),
-    "book_export": (("pdf",),),
+    "narration": (("wav",),),
+    "book_export": (("pdf",), ("mp3",)),
 }
 MEDIA_TYPES = {  # Windows' mimetypes lacks some
     ".flac": "audio/flac",
@@ -85,10 +106,17 @@ MEDIA_TYPES = {  # Windows' mimetypes lacks some
     ".gif": "image/gif",
     ".json": "application/json",
     ".pdf": "application/pdf",
+    ".mp3": "audio/mpeg",
 }
 NOT_NULL_PROJECT_FIELDS = ("name", "style", "pixel_art", "animation_cloud")  # in a PATCH, null leaves these
 LOCAL_HOSTS = ("127.0.0.1", "localhost")
 ANY_ADDRESS = ("0.0.0.0", "::")
+# Who is asking, for the requests only a person or the CLI may make. A custom header, so a web page cannot send it
+# without CORS, which stays off. MCP sends none: an agent must not agree to a license or install by mistake. This is
+# not a security boundary against another program on this PC.
+CLIENT_HEADER = "X-Studio-Client"
+GALLERY_CLIENT = ("gallery",)
+PACK_CLIENTS = ("gallery", "cli")
 
 
 def allowed_hosts(settings: Settings) -> list[str]:
@@ -101,12 +129,20 @@ def allowed_hosts(settings: Settings) -> list[str]:
 
 
 class Services:
-    def __init__(self, settings: Settings, comfy_transport: httpx.AsyncBaseTransport | None):
+    def __init__(
+        self,
+        settings: Settings,
+        comfy_transport: httpx.AsyncBaseTransport | None,
+        make_packs: Callable[[Database], PackManager] | None = None,
+        sidecar: SidecarManager | None = None,
+    ):
         self.settings = settings
         self.db = Database(db_path(settings))
         self.comfy = ComfyClient(settings.comfy_url, transport=comfy_transport)
         self.launcher = ComfyLauncher(settings, self.comfy)
-        self.queue = JobQueue(self.db, self.comfy, settings, RUNNERS, launcher=self.launcher)
+        self.packs = make_packs(self.db) if make_packs else PackManager(settings, self.db)
+        self.sidecar = sidecar or SidecarManager(settings, self.packs.pack(SPEECH_PACK))
+        self.queue = JobQueue(self.db, self.comfy, settings, RUNNERS, launcher=self.launcher, sidecar=self.sidecar)
         self._preflight: dict[str, preflight.FamilyStatus] | None = None
         self._preflight_at = 0.0
         self._preflight_lock = asyncio.Lock()
@@ -116,7 +152,9 @@ class Services:
 
     async def start(self) -> None:
         await self.queue.start()
+        self.packs.start()
         self.db.release_idle_pages()  # after the queue marked what a previous process left running as failed
+        self.db.release_idle_narration()
         up = await self.comfy.is_up()
         if not up:
             log.warning("ComfyUI is not reachable at %s; jobs will fail until it runs", self.settings.comfy_url)
@@ -128,7 +166,9 @@ class Services:
                 log.warning("preflight %s: missing %s", family, status["missing_nodes"] + status["missing_models"])
 
     async def stop(self) -> None:
+        await self.packs.stop()
         await self.queue.stop()
+        await self.sidecar.aclose()
         await self.comfy.aclose()
         self.db.close()
 
@@ -176,6 +216,7 @@ def _book_or_404(s: Services, book_id: str) -> Book:
 
 def _book_out(s: Services, book: Book) -> BookOut:
     s.db.release_idle_pages(book.id)
+    s.db.release_idle_narration(book.id)
     pages = s.db.list_pages(book.id)
     candidates = {p.id: s.db.assets_with_meta("page_id", p.id) for p in pages}
     records = []
@@ -187,16 +228,85 @@ def _book_out(s: Services, book: Book) -> BookOut:
         asset = s.db.get_asset(sheet.asset_id) if sheet.asset_id else None
         sheets.append(SheetOut(**sheet.model_dump(), asset=AssetOut.of(asset) if asset else None))
     counts: dict[str, int] = {}
+    narration_counts: dict[str, int] = {}
     for page in pages:
         counts[page.status] = counts.get(page.status, 0) + 1
+        narration_counts[page.narration_status] = narration_counts.get(page.narration_status, 0) + 1
     return BookOut(
         **book.model_dump(),
-        pages=[PageOut(**p.model_dump(), candidates=[AssetOut.of(a) for a in candidates[p.id]]) for p in pages],
+        pages=[_page_out(s, p, candidates[p.id]) for p in pages],
         sheets=sheets,
         terms=s.db.list_terms(book.id),
         counts=counts,
+        narration_counts=narration_counts,
         license_class=worst_class(records) if records else None,
     )
+
+
+def _page_out(s: Services, page: Page, candidates: list[Asset]) -> PageOut:
+    takes = s.db.assets_with_meta("narration_page_id", page.id)
+    return PageOut(
+        **page.model_dump(),
+        candidates=[AssetOut.of(a) for a in candidates],
+        narration_candidates=[AssetOut.of(a) for a in takes],
+    )
+
+
+def _gallery_url(s: Services, path: str = "") -> str:
+    return f"http://{s.settings.host}:{s.settings.port}/{path}"
+
+
+def _pack_url(s: Services, pack_id: str) -> str:
+    return _gallery_url(s, f"#/packs/{pack_id}")
+
+
+def _pack_or_404(s: Services, pack_id: str) -> PackSpec:
+    pack = s.packs.pack(pack_id)
+    if pack is None:
+        raise HTTPException(404, f"pack {pack_id!r} not found")
+    return pack
+
+
+def _pack_out(s: Services, pack: PackSpec) -> PackOut:
+    row = s.db.get_install(pack.id)
+    missing = {lic.id for lic in missing_consents(s.db, pack)}
+    status = row.status if row else "not_installed"
+    if status == "installed" and not s.packs.is_installed(pack.id):
+        status = "not_installed"  # an older version: this one still needs consent and an install
+    return PackOut(
+        id=pack.id,
+        title=pack.title,
+        feature=pack.feature,
+        version=pack.version,
+        download_size=pack.download_size,
+        tested=pack.tested.model_dump(),
+        gated=pack.gated,
+        licenses=[
+            PackLicenseOut(
+                id=lic.id,
+                name=lic.name,
+                class_=lic.class_,
+                url=lic.url,
+                summary_ko=lic.summary_ko,
+                accepted=lic.id not in missing,
+            )
+            for lic in pack.licenses
+        ],
+        status=status,
+        stage=row.stage if row else None,
+        error=row.error if row else None,
+        license_changed=bool(row and row.error and row.error.startswith("license_changed")),
+        installed_version=row.version if row and row.status == "installed" else None,
+        log_tail=s.packs.log_tail(pack.id),
+    )
+
+
+def _client_is(*allowed: str):
+    def check(request: Request) -> None:
+        if request.headers.get(CLIENT_HEADER) not in allowed:
+            raise HTTPException(403, f"only {' or '.join(allowed)} may do this")
+
+    return Depends(check)
 
 
 def _job_out(s: Services, job: Job) -> JobOut:
@@ -278,10 +388,15 @@ def _export_animation(s: Services, asset: Asset, dest: Path, stem: str) -> list[
     return [dest / f"{stem}.png", dest / f"{stem}.json", folder]
 
 
-def create_app(settings: Settings, comfy_transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
+def create_app(
+    settings: Settings,
+    comfy_transport: httpx.AsyncBaseTransport | None = None,
+    make_packs: Callable[[Database], PackManager] | None = None,
+    sidecar: SidecarManager | None = None,
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        services = Services(settings, comfy_transport)
+        services = Services(settings, comfy_transport, make_packs, sidecar)
         app.state.services = services
         await services.start()
         try:
@@ -327,7 +442,8 @@ def create_app(settings: Settings, comfy_transport: httpx.AsyncBaseTransport | N
                 "queued": s.db.count_jobs("queued"),
                 "current": _current_job(s),
             },
-            "gallery_url": f"http://{s.settings.host}:{s.settings.port}/",
+            "packs": {pack.id: _pack_out(s, pack).status for pack in s.packs.catalog.values()},
+            "gallery_url": _gallery_url(s),
             "repo_dir": str(REPO_ROOT),  # for the gallery's MCP registration command
         }
 
@@ -536,6 +652,46 @@ def create_app(settings: Settings, comfy_transport: httpx.AsyncBaseTransport | N
         s.queue.notify()
         return JobsCreated(job_ids=job_ids)
 
+    @app.post("/api/books/{book_id}/narrate", status_code=202)
+    async def narrate_pages(book_id: str, body: GeneratePages, s: S) -> JobsCreated:
+        """One job per page: a narrator reads the page's text. A new take joins the page's takes."""
+        book = _book_or_404(s, book_id)
+        if not s.packs.is_installed(SPEECH_PACK):
+            raise HTTPException(
+                409,
+                f"the speech pack is not installed. A person agrees to its license in the gallery: "
+                f"{_pack_url(s, SPEECH_PACK)}, then it installs there or with `aiassetstudio pack install {SPEECH_PACK}`",
+            )
+        s.db.release_idle_narration(book_id)
+        pages = s.db.list_pages(book_id)
+        if body.pages is None:
+            chosen = [p for p in pages if p.narration_status in ("draft", "redo")]
+        else:
+            by_number = {p.number: p for p in pages}
+            if missing := [n for n in body.pages if n not in by_number]:
+                raise HTTPException(404, f"book {book_id!r} has no page {missing}")
+            chosen = [by_number[n] for n in dict.fromkeys(body.pages)]
+        if not chosen:
+            raise HTTPException(409, "no page to narrate: none is in draft or redo")
+        if busy := [p.number for p in chosen if p.narration_status == "queued"]:
+            raise HTTPException(409, f"pages {busy} are already being narrated")
+        if empty := [p.number for p in chosen if not p.text]:
+            raise HTTPException(422, f"pages {empty} have no text")
+        job_ids = []
+        for page in chosen:
+            params = {
+                "book_id": book_id,
+                "page_id": page.id,
+                "page_number": page.number,
+                "description": f"{book.title}, page {page.number}",
+                "count": 1,
+                "seed": body.seed,
+            }
+            job_ids.append(s.db.create_job(book.project_id, "narration", "tts", params).id)
+            s.db.update_page(page.id, narration_status="queued")
+        s.queue.notify()
+        return JobsCreated(job_ids=job_ids)
+
     @app.post("/api/sheets/{sheet_id}/generate", status_code=202)
     async def generate_sheet(sheet_id: str, body: GenerateSheet, s: S) -> JobCreated:
         """A picture of a place or prop sheet. Characters are drawn as sprites (transparent, from POST /api/jobs/image)."""
@@ -558,7 +714,8 @@ def create_app(settings: Settings, comfy_transport: httpx.AsyncBaseTransport | N
 
     @app.patch("/api/pages/{page_id}")
     async def update_page(page_id: str, body: PageUpdate, s: S) -> PageOut:
-        """What the gallery does: choose a candidate, approve, or ask for a redo with a note for the agent."""
+        """What the gallery does: choose a candidate or take, approve, or ask for a redo with a note for the agent.
+        The picture and the narration are reviewed apart."""
         page = s.db.get_page(page_id)
         if page is None:
             raise HTTPException(404, f"page {page_id!r} not found")
@@ -571,8 +728,15 @@ def create_app(settings: Settings, comfy_transport: httpx.AsyncBaseTransport | N
             if chosen is None:
                 raise HTTPException(422, f"page {page.number} has no picture to approve")
             fields.setdefault("note", None)
-        page = s.db.update_page(page_id, **fields)
-        return PageOut(**page.model_dump(), candidates=[AssetOut.of(a) for a in candidates])
+        take = fields.get("narration_asset_id", page.narration_asset_id)
+        takes = {a.id for a in s.db.assets_with_meta("narration_page_id", page_id)}
+        if take is not None and take not in takes:
+            raise HTTPException(422, f"asset {take!r} is not a take of page {page.number}")
+        if fields.get("narration_status") == "approved":
+            if take is None:
+                raise HTTPException(422, f"page {page.number} has no narration to approve")
+            fields.setdefault("narration_note", None)
+        return _page_out(s, s.db.update_page(page_id, **fields), candidates)
 
     @app.post("/api/books/{book_id}/check-sources")
     async def check_sources(book_id: str, body: CheckSources, s: S) -> list[StalePage]:
@@ -597,19 +761,77 @@ def create_app(settings: Settings, comfy_transport: httpx.AsyncBaseTransport | N
 
     @app.post("/api/books/{book_id}/export", status_code=202)
     async def export_book(book_id: str, body: BookExportRequest, s: S) -> JobCreated:
-        """Lay the book out. Unless `allow_draft`, every page must be approved."""
+        """Lay the book out as a PDF, or join its narration as an MP3. Unless `allow_draft`, every page's picture, or
+        narration, must be approved."""
         book = _book_or_404(s, book_id)
         pages = s.db.list_pages(book_id)
         if not pages:
             raise HTTPException(409, f"book {book_id!r} has no pages")
-        if not body.allow_draft and (waiting := [p.number for p in pages if p.status != "approved"]):
-            raise HTTPException(409, f"pages {waiting} are not approved; approve them or pass allow_draft")
-        if not any(p.image_asset_id for p in pages):
-            raise HTTPException(409, f"book {book_id!r} has no chosen pictures")
+        audio = body.format == "mp3"
+        states = [(p.number, p.narration_status if audio else p.status) for p in pages]
+        if not body.allow_draft and (waiting := [n for n, state in states if state != "approved"]):
+            what = "narration of pages" if audio else "pages"
+            raise HTTPException(409, f"{what} {waiting} are not approved; approve them or pass allow_draft")
+        if not any(p.narration_asset_id if audio else p.image_asset_id for p in pages):
+            raise HTTPException(409, f"book {book_id!r} has no chosen {'narration' if audio else 'pictures'}")
         params = {"book_id": book_id, "format": body.format, "description": f"{book.title} ({body.format})", "count": 1}
         job = s.db.create_job(book.project_id, "book_export", "none", params)
         s.queue.notify()
         return JobCreated(job_id=job.id)
+
+    # --- feature packs --------------------------------------------------------------------------
+
+    @app.get("/api/packs")
+    async def list_packs(s: S) -> list[PackOut]:
+        return [_pack_out(s, pack) for pack in s.packs.catalog.values()]
+
+    @app.get("/api/packs/{pack_id}")
+    async def get_pack(pack_id: str, s: S) -> PackOut:
+        return _pack_out(s, _pack_or_404(s, pack_id))
+
+    @app.post("/api/packs/{pack_id}/accept", dependencies=[_client_is(*GALLERY_CLIENT)])
+    async def accept_pack(pack_id: str, body: PackAccept, s: S) -> PackOut:
+        """A person agreed to these licenses. Only the gallery may say so."""
+        pack = _pack_or_404(s, pack_id)
+        try:
+            accept(s.db, pack, body.licenses)
+        except KeyError as e:
+            raise HTTPException(422, e.args[0]) from e
+        return _pack_out(s, pack)
+
+    @app.post("/api/packs/{pack_id}/install", status_code=202, dependencies=[_client_is(*PACK_CLIENTS)])
+    async def install_pack(pack_id: str, s: S) -> PackOut:
+        """Start installing and return at once; GET the pack for its progress. Needs every license agreed to."""
+        pack = _pack_or_404(s, pack_id)
+        try:
+            s.packs.install(pack_id)
+        except ConsentRequired as e:
+            detail = {"code": "consent_required", "message": str(e), "gallery_url": _pack_url(s, pack_id)}
+            raise HTTPException(409, detail) from e
+        except InsufficientDisk as e:
+            raise HTTPException(507, str(e)) from e
+        except PackError as e:
+            raise HTTPException(409, str(e)) from e
+        return _pack_out(s, pack)
+
+    @app.post("/api/packs/{pack_id}/cancel", dependencies=[_client_is(*PACK_CLIENTS)])
+    async def cancel_pack(pack_id: str, s: S) -> PackOut:
+        pack = _pack_or_404(s, pack_id)
+        await s.packs.cancel(pack_id)
+        return _pack_out(s, pack)
+
+    @app.delete("/api/packs/{pack_id}", dependencies=[_client_is(*PACK_CLIENTS)])
+    async def remove_pack(pack_id: str, s: S) -> PackOut:
+        """Delete what the install recorded. Its consent stays on record: it says what a person once agreed to."""
+        pack = _pack_or_404(s, pack_id)
+        if any(job.family == "tts" for job in s.db.list_jobs(statuses=["queued", "running"])):
+            raise HTTPException(409, "narration jobs are waiting or running; cancel them first")
+        await s.sidecar.stop()
+        try:
+            await asyncio.to_thread(s.packs.remove, pack_id)
+        except (PackError, OSError) as e:
+            raise HTTPException(409, str(e)) from e
+        return _pack_out(s, pack)
 
     # --- assets ---------------------------------------------------------------------------------
 

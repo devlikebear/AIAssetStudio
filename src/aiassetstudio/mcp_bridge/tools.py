@@ -118,6 +118,15 @@ def _animation_text(a: dict) -> str:
     return "\n".join(lines)
 
 
+def _narration_text(api: StudioApi, a: dict) -> str:
+    m = a["meta"]
+    lines = [f"asset {a['id']} seed={a['seed']} status={a['status']}: page {m['page_number']}, {m['length_s']:.1f} s"]
+    if m.get("spoken_text") != m.get("text"):
+        lines.append(f"  read as: {m['spoken_text']}")
+    lines.append(f"  listen: {api.base_url}{a['files']['wav']}")
+    return "\n".join(lines)
+
+
 def _book_export_text(a: dict) -> str:
     m = a["meta"]
     lines = [f"asset {a['id']} book_export: {len(m.get('pages', []))} pages as {m.get('format', 'pdf').upper()}"]
@@ -130,15 +139,21 @@ def _book_export_text(a: dict) -> str:
 def _page_line(p: dict) -> str:
     refs = ", ".join(r.get("label") or r["node_id"] for r in p["source_refs"])
     line = f"page {p['number']} [{p['status']}] {len(p['candidates'])} pictures, chosen {p['image_asset_id'] or 'none'}"
+    line += f"; narration [{p['narration_status']}] {len(p['narration_candidates'])} takes"
     line += f"; rests on {refs}" if refs else "; NO SOURCE RECORDED"
     if p["note"]:
         line += f"\n  the person asks: {p['note']}"
+    if p["narration_note"]:
+        line += f"\n  the person asks of the narration: {p['narration_note']}"
     return line
 
 
 def _book_text(api: StudioApi, book: dict) -> str:
     done = book["counts"].get("approved", 0)
-    lines = [f"book {book['id']} [{book['project']}] {book['title']}: {done}/{len(book['pages'])} pages approved"]
+    spoken = book["narration_counts"].get("approved", 0)
+    total = len(book["pages"])
+    head = f"book {book['id']} [{book['project']}] {book['title']}: {done}/{total} pages approved"
+    lines = [f"{head}, {spoken}/{total} narrations approved"]
     if book["license_class"] in WARN_CLASSES:
         lines.append(f"  license of the chosen pictures: {book['license_class']}; tell the user before they share it")
     lines += [
@@ -164,6 +179,8 @@ async def studio_status(api: StudioApi) -> str:
         lines.append("ComfyUI: down; the next generation request starts it (up to 2 min)")
         if comfy.get("error"):
             lines.append(f"  last start error: {comfy['error']}")
+    for pack, state in s.get("packs", {}).items():
+        lines.append(f"pack {pack}: {state}")
     for family, st in s["preflight"].items():
         label = FAMILY_LABELS.get(family, family)
         if st["ok"]:
@@ -257,6 +274,9 @@ async def get_job(api: StudioApi, job_id: str, wait_seconds: int = 30) -> list[s
         if a["kind"] == "bgm":
             out.append(_song_text(api, a))
             continue
+        if a["kind"] == "narration":
+            out.append(_narration_text(api, a))
+            continue
         if a["kind"] == "animation":
             out.append(_animation_text(a))
         elif a["kind"] == "book_export":
@@ -278,10 +298,15 @@ async def get_job(api: StudioApi, job_id: str, wait_seconds: int = 30) -> list[s
             "them in the gallery. To use one: set_asset_status(asset_id, 'selected'), then export_asset(asset_id, "
             "name=...) writes <name>.png (the frames in one row), <name>/000.png-009.png and <name>.json."
         )
+    elif any(a["kind"] == "narration" for a in assets):
+        out.append(
+            "You cannot hear this. Ask the user to listen in the gallery and approve it or leave a note: "
+            f"{api.base_url}/#/books/{assets[0]['meta']['book_id']}"
+        )
     elif any(a["kind"] == "page_image" for a in assets):
         out.append(f"See the whole book with get_book(book_id='{assets[0]['meta']['book_id']}').")
     elif any(a["kind"] == "book_export" for a in assets):
-        out.append("export_asset(asset_id, dest_dir=..., name=...) copies the PDF out of the studio.")
+        out.append("export_asset(asset_id, dest_dir=..., name=...) copies the file out of the studio.")
     elif assets:
         out.append("To use one: set_asset_status(asset_id, 'selected'), then export_asset(asset_id).")
     out.append(f"Gallery: {api.base_url}/#/jobs/{job_id}")
@@ -429,6 +454,36 @@ async def check_book_sources(api: StudioApi, book_id: str, versions: dict[str, i
     )
 
 
-async def export_book(api: StudioApi, book_id: str, allow_draft: bool = False) -> str:
-    job_id = await api.export_book(book_id, allow_draft)
-    return f"Queued job {job_id}. Call get_job(job_id='{job_id}', wait_seconds=30) for the PDF and any warnings."
+async def export_book(api: StudioApi, book_id: str, allow_draft: bool = False, format: str = "pdf") -> str:
+    job_id = await api.export_book(book_id, allow_draft, format)
+    return f"Queued job {job_id}. Call get_job(job_id='{job_id}', wait_seconds=30) for the file and any warnings."
+
+
+async def generate_narration(
+    api: StudioApi, book_id: str, pages: list[int] | None = None, seed: int | None = None
+) -> str:
+    job_ids = await api.narrate_pages(book_id, pages, seed)
+    return (
+        f"Queued {len(job_ids)} pages: {', '.join(job_ids)}. About 30 s each; the first takes a minute or two longer "
+        f"while the speech model loads. Follow them with get_job(job_id, wait_seconds=60) or get_book(book_id="
+        f"'{book_id}'). You cannot hear audio: then ask the user to listen in the gallery: "
+        f"{api.base_url}/#/books/{book_id}"
+    )
+
+
+async def list_packs(api: StudioApi) -> str:
+    packs = await api.list_packs()
+    if not packs:
+        return "No feature packs."
+    lines = []
+    for p in packs:
+        waiting = [lic["name"] for lic in p["licenses"] if not lic["accepted"]]
+        line = f"{p['id']} ({p['title']}, {p['feature']}): {p['status']}"
+        if p["stage"]:
+            line += f" ({p['stage']})"
+        if p["error"]:
+            line += f": {p['error']}"
+        if waiting and p["status"] != "installed":
+            line += f"; a person must agree to {', '.join(waiting)} in the gallery"
+        lines.append(f"{line}\n  gallery: {api.base_url}/#/packs/{p['id']}")
+    return "\n".join(lines)
