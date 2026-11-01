@@ -13,6 +13,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from ..book_prompts import page_prompt, sheet_prompt
 from ..comfy.client import ComfyClient, ComfyError, output_files
 from ..comfy.graphs import (
     ACE_MODELS,
@@ -57,6 +58,7 @@ from ..post.audio import (
     trim_trailing_silence,
     write_wav,
 )
+from ..post.book import BookPage, render_pdf
 from ..post.image import (
     PIXEL_MARGIN,
     PixelSpec,
@@ -71,10 +73,11 @@ from ..post.image import (
     upscale_nearest,
 )
 from ..prompts import build_image_prompt
+from ..provenance import WARN_CLASSES, license_names, license_records, worst_class
 from ..spritegen.client import SpriteGen
 from ..store.db import Database, new_id
 from ..store.files import IMAGE_FILES, asset_dir, from_rel, to_rel
-from ..store.models import Job, Project
+from ..store.models import Book, Job, Page, Project, Sheet
 
 IMAGE_SIZE = 1024
 # User decision 2026-09-25 (docs/plans/notes/ref-rgba-validation.md): a project's reference image goes in with its
@@ -241,6 +244,7 @@ async def run_image_job(ctx: RunContext, job: Job) -> None:
             "seed": seed,
             "workflow": "qwen_ref_turbo" if ref else "qwen_t2i_turbo",
             "models": QWEN_MODELS,
+            "licenses": license_records(QWEN_MODELS),
             "steps": QWEN_TURBO_STEPS,
             "sampler": QWEN_SAMPLER,
             "width": IMAGE_SIZE,
@@ -373,6 +377,7 @@ async def run_bgm_job(ctx: RunContext, job: Job) -> None:
             "seed": seed,
             "workflow": workflow,
             **model,
+            "licenses": license_records(model["models"]),
             "comfy_prompt_id": prompt_id,
             "comfy_output": {"filename": output["filename"], "subfolder": output["subfolder"]},
             **stats,
@@ -503,4 +508,182 @@ async def run_animation_job(ctx: RunContext, job: Job) -> None:
         ctx.db.update_job(job.id, timings={"candidates": timings})
 
 
-RUNNERS = {"image": run_image_job, "bgm": run_bgm_job, "animation": run_animation_job}
+def _save_picture(data: bytes, directory: Path) -> list[int]:
+    """raw.png as ComfyUI saved it, processed.png and preview.png without alpha. Returns the picture's size."""
+    (directory / "raw.png").write_bytes(data)
+    with Image.open(io.BytesIO(data)) as raw:
+        picture = raw.convert("RGB")
+    picture.save(directory / "processed.png")
+    make_preview(picture).save(directory / "preview.png")
+    return list(picture.size)
+
+
+async def _upload_sheets(ctx: RunContext, book: Book, sheets: tuple[Sheet, ...]) -> list[Reference]:
+    refs = []
+    for sheet in sheets:
+        asset = ctx.db.get_asset(sheet.asset_id)
+        path = from_rel(ctx.settings, asset.files["processed"]) if asset is not None else None
+        if path is None or not path.is_file():
+            raise FileNotFoundError(f"the picture of sheet {sheet.name!r} is missing; generate or set it again")
+        name = await ctx.comfy.upload_image(path, f"book_{book.id}_{sheet.id}.png")
+        refs.append(Reference(name, REFERENCE_MODE))
+    return refs
+
+
+async def run_page_image_job(ctx: RunContext, job: Job) -> None:
+    """One full-page picture of a book, or one picture of a place or prop sheet. Same steps as run_image_job, including
+    the encode in a prompt of its own, but opaque, in the book's shape, with up to three references. The reference
+    KV cache stays in RAM: spikes/studio/three_refs.py, 20 s a picture with 5.4 GB of VRAM free."""
+    params = dict(job.params)
+    if params.get("seed") is None:
+        params["seed"] = random.randrange(2**31)
+        ctx.db.update_job(job.id, params=params)
+    seed = int(params["seed"])
+    project = ctx.db.get_project(job.project)
+    book = ctx.db.get_book(params["book_id"])
+    page = ctx.db.get_page(params["page_id"]) if params.get("page_id") else None
+    if page is not None:
+        built = page_prompt(project.style, ctx.db.list_sheets(book.id), page)
+        prompt, sheets = built.text, built.refs
+    else:
+        prompt, sheets = sheet_prompt(project.style, ctx.db.get_sheet(params["sheet_id"])), ()
+
+    ctx.db.update_job(job.id, stage="uploading references" if sheets else "encoding prompt")
+    refs = await _upload_sheets(ctx, book, sheets)
+    ctx.db.update_job(job.id, stage="encoding prompt")
+    t0 = time.monotonic()
+    encode_id = str(uuid.uuid4())
+    ctx.prompt_ids.append(encode_id)
+    await ctx.comfy.submit(qwen_text_encode(prompt, refs), prompt_id=encode_id)
+    await ctx.comfy.free(unload_models=True, free_memory=False)
+    await ctx.comfy.wait(encode_id, timeout=ctx.settings.image_timeout)
+    t1 = time.monotonic()
+    if ctx.cancel_requested():
+        raise JobCancelled()
+
+    ctx.db.update_job(job.id, stage="generating")
+    asset_id = new_id()
+    prompt_id = str(uuid.uuid4())
+    ctx.prompt_ids.append(prompt_id)
+    graph = qwen_t2i_turbo(
+        prompt, seed, f"{project.slug}_{asset_id}", book.width, book.height, ref=refs, cache_cpu=bool(refs)
+    )
+    await ctx.comfy.submit(graph, prompt_id=prompt_id)
+    entry = await ctx.comfy.wait(prompt_id, timeout=ctx.settings.image_timeout)
+    t2 = time.monotonic()
+    images = output_files(entry, QWEN_OUTPUT_NODE)
+    if not images:
+        raise ComfyError(f"ComfyUI returned no image for prompt {prompt_id}")
+    output = images[0]
+    data = await ctx.comfy.fetch_output(output["filename"], output["subfolder"], output.get("type", "output"))
+
+    directory = asset_dir(ctx.settings, project.slug, asset_id)
+    size = await asyncio.to_thread(_save_picture, data, directory)
+    step = {"encode": round(t1 - t0, 2), "generate": round(t2 - t1, 2)}
+    meta = {
+        "book_id": book.id,
+        "description": params["description"],
+        "prompt": prompt,
+        "seed": seed,
+        "workflow": "qwen_t2i_turbo",
+        "models": QWEN_MODELS,
+        "licenses": license_records(QWEN_MODELS),
+        "steps": QWEN_TURBO_STEPS,
+        "sampler": QWEN_SAMPLER,
+        "width": size[0],
+        "height": size[1],
+        "references": [{"sheet": s.name, "asset_id": s.asset_id} for s in sheets],
+        "comfy_prompt_id": prompt_id,
+        "timings": step,
+    }
+    meta |= {"page_id": page.id, "page_number": page.number} if page is not None else {"sheet_id": params["sheet_id"]}
+    files = {name: to_rel(ctx.settings, directory / f"{name}.png") for name in IMAGE_FILES}
+    ctx.db.create_asset(job.id, job.project_id, "page_image", files=files, meta=meta, seed=seed, asset_id=asset_id)
+    ctx.db.update_job(job.id, timings=step)
+    if page is None:
+        sheet = ctx.db.get_sheet(params["sheet_id"])
+        if sheet.asset_id is None:
+            ctx.db.set_sheet_asset(sheet.id, asset_id)
+    else:
+        current = ctx.db.get_page(page.id)
+        ctx.db.update_page(page.id, status="candidate", image_asset_id=current.image_asset_id or asset_id)
+
+
+def _page_picture(ctx: RunContext, page: Page) -> Path:
+    asset = ctx.db.get_asset(page.image_asset_id)
+    path = from_rel(ctx.settings, asset.files["processed"]) if asset is not None else None
+    if path is None or not path.is_file():
+        raise FileNotFoundError(f"the picture of page {page.number} is missing")
+    return path
+
+
+def _colophon(book: Book, records: list[dict]) -> list[str]:
+    lines = []
+    if label := (book.source or {}).get("label"):
+        lines.append(f"Source: {label}")
+    lines.append("Pictures: " + ", ".join(license_names(records)))
+    if worst_class(records) in WARN_CLASSES:
+        lines.append("Made with a model whose license limits this use. Check it before sharing or selling this book.")
+    return lines
+
+
+async def run_book_export_job(ctx: RunContext, job: Job) -> None:
+    """The book's chosen pictures and text as a PDF; a job so that it shares the queue, the status and the gallery."""
+    project = ctx.db.get_project(job.project)
+    book = ctx.db.get_book(job.params["book_id"])
+    pages = [p for p in ctx.db.list_pages(book.id) if p.image_asset_id]
+    if not pages:
+        raise ValueError(f"book {book.id} has no page with a chosen picture")
+    t0 = time.monotonic()
+    records = []
+    for page in pages:
+        records.extend(ctx.db.get_asset(page.image_asset_id).meta.get("licenses", []))
+    records = list({r["file"]: r for r in records}.values())
+    book_pages = [
+        BookPage(p.number, _page_picture(ctx, p), p.text, (p.source_refs[0].get("label", "") if p.source_refs else ""))
+        for p in pages
+    ]
+    cover = next((b.image for b in book_pages if b.number == book.cover_page), book_pages[0].image)
+    asset_id = new_id()
+    directory = asset_dir(ctx.settings, project.slug, asset_id)
+    ctx.db.update_job(job.id, stage="laying out")
+    warnings = await asyncio.to_thread(
+        render_pdf,
+        directory / "book.pdf",
+        book.title,
+        cover,
+        book_pages,
+        _colophon(book, records),
+        ctx.settings.book_font,
+        book.height / book.width,
+    )
+    with Image.open(cover) as picture:
+        make_preview(picture.convert("RGB")).save(directory / "preview.png")
+    worst = worst_class(records)
+    if worst in WARN_CLASSES:
+        warnings.append(f"license: {'; '.join(license_names(records))}. Check it before sharing or selling this book.")
+    meta = {
+        "book_id": book.id,
+        "description": book.title,
+        "format": "pdf",
+        "pages": [p.number for p in pages],
+        "unapproved_pages": [p.number for p in pages if p.status != "approved"],
+        "licenses": records,
+        "license_class": worst,
+        "warnings": warnings,
+    }
+    files = {
+        "pdf": to_rel(ctx.settings, directory / "book.pdf"),
+        "preview": to_rel(ctx.settings, directory / "preview.png"),
+    }
+    ctx.db.create_asset(job.id, job.project_id, "book_export", files=files, meta=meta, asset_id=asset_id)
+    ctx.db.update_job(job.id, timings={"export": round(time.monotonic() - t0, 2)})
+
+
+RUNNERS = {
+    "image": run_image_job,
+    "bgm": run_bgm_job,
+    "animation": run_animation_job,
+    "page_image": run_page_image_job,
+    "book_export": run_book_export_job,
+}

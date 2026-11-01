@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Literal, get_args
+from typing import Annotated, get_args
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -26,23 +26,39 @@ from ..comfy.launcher import ComfyLauncher
 from ..config import REPO_ROOT, Settings
 from ..jobs.queue import JobQueue
 from ..jobs.runners import RUNNERS
+from ..provenance import worst_class
 from ..spritegen.access import animation_status
 from ..store.db import Database, DuplicateSlug, now
 from ..store.files import db_path, export_stem, from_rel, unique_stem
-from ..store.models import TERMINAL_STATUSES, Asset, AssetStatus, Job, JobStatus, Project
+from ..store.models import TERMINAL_STATUSES, Asset, AssetKind, AssetStatus, Book, Job, JobStatus, Project, Term
 from ..store.reference import ReferenceImageError, load_reference, store_reference
 from .schemas import (
     AnimationJobCreate,
     AssetOut,
     AssetUpdate,
     BgmJobCreate,
+    BookCreate,
+    BookExportRequest,
+    BookOut,
+    BookUpdate,
+    CheckSources,
     ExportRequest,
     ExportResult,
+    GeneratePages,
+    GenerateSheet,
     ImageJobCreate,
     JobCreated,
     JobOut,
+    JobsCreated,
+    PageIn,
+    PageOut,
+    PageUpdate,
     ProjectCreate,
     ProjectUpdate,
+    SheetIn,
+    SheetOut,
+    StalePage,
+    TermIn,
     missing_pixel_fields,
 )
 
@@ -59,6 +75,8 @@ EXPORT_FILES = {
     "sprite": (("processed",),),
     "icon": (("processed",),),
     "bgm": (("loop_wav", "loop_ogg"), ("full_wav", "full_ogg")),
+    "page_image": (("processed",),),
+    "book_export": (("pdf",),),
 }
 MEDIA_TYPES = {  # Windows' mimetypes lacks some
     ".flac": "audio/flac",
@@ -66,6 +84,7 @@ MEDIA_TYPES = {  # Windows' mimetypes lacks some
     ".ogg": "audio/ogg",
     ".gif": "image/gif",
     ".json": "application/json",
+    ".pdf": "application/pdf",
 }
 NOT_NULL_PROJECT_FIELDS = ("name", "style", "pixel_art", "animation_cloud")  # in a PATCH, null leaves these
 LOCAL_HOSTS = ("127.0.0.1", "localhost")
@@ -97,6 +116,7 @@ class Services:
 
     async def start(self) -> None:
         await self.queue.start()
+        self.db.release_idle_pages()  # after the queue marked what a previous process left running as failed
         up = await self.comfy.is_up()
         if not up:
             log.warning("ComfyUI is not reachable at %s; jobs will fail until it runs", self.settings.comfy_url)
@@ -145,6 +165,38 @@ def _project_or_404(s: Services, slug: str) -> Project:
     if project is None:
         raise HTTPException(404, f"project {slug!r} not found")
     return project
+
+
+def _book_or_404(s: Services, book_id: str) -> Book:
+    book = s.db.get_book(book_id)
+    if book is None:
+        raise HTTPException(404, f"book {book_id!r} not found")
+    return book
+
+
+def _book_out(s: Services, book: Book) -> BookOut:
+    s.db.release_idle_pages(book.id)
+    pages = s.db.list_pages(book.id)
+    candidates = {p.id: s.db.assets_with_meta("page_id", p.id) for p in pages}
+    records = []
+    for page in pages:
+        chosen = next((a for a in candidates[page.id] if a.id == page.image_asset_id), None)
+        records.extend(chosen.meta.get("licenses", []) if chosen else [])
+    sheets = []
+    for sheet in s.db.list_sheets(book.id):
+        asset = s.db.get_asset(sheet.asset_id) if sheet.asset_id else None
+        sheets.append(SheetOut(**sheet.model_dump(), asset=AssetOut.of(asset) if asset else None))
+    counts: dict[str, int] = {}
+    for page in pages:
+        counts[page.status] = counts.get(page.status, 0) + 1
+    return BookOut(
+        **book.model_dump(),
+        pages=[PageOut(**p.model_dump(), candidates=[AssetOut.of(a) for a in candidates[p.id]]) for p in pages],
+        sheets=sheets,
+        terms=s.db.list_terms(book.id),
+        counts=counts,
+        license_class=worst_class(records) if records else None,
+    )
 
 
 def _job_out(s: Services, job: Job) -> JobOut:
@@ -401,13 +453,171 @@ def create_app(settings: Settings, comfy_transport: httpx.AsyncBaseTransport | N
             raise HTTPException(404, f"job {job_id!r} not found")
         return _job_out(s, job)
 
+    # --- books ----------------------------------------------------------------------------------
+
+    @app.post("/api/books", status_code=201)
+    async def create_book(body: BookCreate, s: S) -> BookOut:
+        project = _project_or_404(s, body.project)
+        return _book_out(s, s.db.create_book(project.id, body.title, body.source, body.width, body.height))
+
+    @app.get("/api/books")
+    async def list_books(s: S, project: str | None = None) -> list[Book]:
+        if project is not None:
+            _project_or_404(s, project)
+        return s.db.list_books(project)
+
+    @app.get("/api/books/{book_id}")
+    async def get_book(book_id: str, s: S) -> BookOut:
+        return _book_out(s, _book_or_404(s, book_id))
+
+    @app.patch("/api/books/{book_id}")
+    async def update_book(book_id: str, body: BookUpdate, s: S) -> BookOut:
+        _book_or_404(s, book_id)
+        fields = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+        return _book_out(s, s.db.update_book(book_id, **fields))
+
+    @app.put("/api/books/{book_id}/pages")
+    async def save_pages(book_id: str, pages: list[PageIn], s: S) -> BookOut:
+        """Add or change pages by number. A change to what a page shows sends it back to draft."""
+        book = _book_or_404(s, book_id)
+        s.db.save_pages(book_id, [p.model_dump(exclude_unset=True) for p in pages])
+        return _book_out(s, book)
+
+    @app.put("/api/books/{book_id}/sheets")
+    async def save_sheets(book_id: str, sheets: list[SheetIn], s: S) -> BookOut:
+        book = _book_or_404(s, book_id)
+        for sheet in sheets:
+            if sheet.asset_id is None:
+                continue
+            asset = s.db.get_asset(sheet.asset_id)
+            if asset is None or asset.project_id != book.project_id:
+                raise HTTPException(404, f"asset {sheet.asset_id!r} not found in project {book.project!r}")
+            if "processed" not in asset.files:
+                raise HTTPException(422, f"asset {asset.id} is a {asset.kind}; a sheet needs a picture")
+        s.db.save_sheets(book_id, [sheet.model_dump() for sheet in sheets])
+        return _book_out(s, book)
+
+    @app.put("/api/books/{book_id}/terms")
+    async def set_terms(book_id: str, terms: list[TermIn], s: S) -> list[Term]:
+        _book_or_404(s, book_id)
+        return s.db.set_terms(book_id, [t.model_dump() for t in terms])
+
+    @app.post("/api/books/{book_id}/generate", status_code=202)
+    async def generate_pages(book_id: str, body: GeneratePages, s: S) -> JobsCreated:
+        """One job per page. A new picture joins the page's candidates; an earlier choice stays until it is changed."""
+        book = _book_or_404(s, book_id)
+        s.db.release_idle_pages(book_id)
+        pages = s.db.list_pages(book_id)
+        if body.pages is None:
+            chosen = [p for p in pages if p.status in ("draft", "redo")]
+        else:
+            by_number = {p.number: p for p in pages}
+            if missing := [n for n in body.pages if n not in by_number]:
+                raise HTTPException(404, f"book {book_id!r} has no page {missing}")
+            chosen = [by_number[n] for n in dict.fromkeys(body.pages)]
+        if not chosen:
+            raise HTTPException(409, "no page to generate: none is in draft or redo")
+        if busy := [p.number for p in chosen if p.status == "queued"]:
+            raise HTTPException(409, f"pages {busy} are already being generated")
+        if empty := [p.number for p in chosen if not p.image_prompt]:
+            raise HTTPException(422, f"pages {empty} have no image_prompt")
+        job_ids = []
+        for page in chosen:
+            params = {
+                "book_id": book_id,
+                "page_id": page.id,
+                "page_number": page.number,
+                "description": f"{book.title}, page {page.number}",
+                "count": 1,
+                "seed": body.seed,
+            }
+            job_ids.append(s.db.create_job(book.project_id, "page_image", "qwen", params).id)
+            s.db.update_page(page.id, status="queued")
+        s.queue.notify()
+        return JobsCreated(job_ids=job_ids)
+
+    @app.post("/api/sheets/{sheet_id}/generate", status_code=202)
+    async def generate_sheet(sheet_id: str, body: GenerateSheet, s: S) -> JobCreated:
+        """A picture of a place or prop sheet. Characters are drawn as sprites (transparent, from POST /api/jobs/image)."""
+        sheet = s.db.get_sheet(sheet_id)
+        if sheet is None:
+            raise HTTPException(404, f"sheet {sheet_id!r} not found")
+        if sheet.kind == "character":
+            raise HTTPException(422, "draw a character as a sprite and link it with its asset_id")
+        book = s.db.get_book(sheet.book_id)
+        params = {
+            "book_id": book.id,
+            "sheet_id": sheet.id,
+            "description": f"{book.title}, {sheet.kind} {sheet.name}",
+            "count": 1,
+            "seed": body.seed,
+        }
+        job = s.db.create_job(book.project_id, "page_image", "qwen", params)
+        s.queue.notify()
+        return JobCreated(job_id=job.id)
+
+    @app.patch("/api/pages/{page_id}")
+    async def update_page(page_id: str, body: PageUpdate, s: S) -> PageOut:
+        """What the gallery does: choose a candidate, approve, or ask for a redo with a note for the agent."""
+        page = s.db.get_page(page_id)
+        if page is None:
+            raise HTTPException(404, f"page {page_id!r} not found")
+        fields = body.model_dump(exclude_unset=True)
+        candidates = s.db.assets_with_meta("page_id", page_id)
+        chosen = fields.get("image_asset_id", page.image_asset_id)
+        if chosen is not None and chosen not in {a.id for a in candidates}:
+            raise HTTPException(422, f"asset {chosen!r} is not a candidate of page {page.number}")
+        if fields.get("status") == "approved":
+            if chosen is None:
+                raise HTTPException(422, f"page {page.number} has no picture to approve")
+            fields.setdefault("note", None)
+        page = s.db.update_page(page_id, **fields)
+        return PageOut(**page.model_dump(), candidates=[AssetOut.of(a) for a in candidates])
+
+    @app.post("/api/books/{book_id}/check-sources")
+    async def check_sources(book_id: str, body: CheckSources, s: S) -> list[StalePage]:
+        """Pages resting on a passage whose content_version differs from `versions`. The caller reads the versions from
+        the work's own system; Studio never connects to it."""
+        _book_or_404(s, book_id)
+        stale = []
+        for page in s.db.list_pages(book_id):
+            for ref in page.source_refs:
+                current = body.versions.get(ref["node_id"])
+                if current != ref["content_version"]:
+                    stale.append(
+                        StalePage(
+                            number=page.number,
+                            node_id=ref["node_id"],
+                            label=ref.get("label", ""),
+                            was=ref["content_version"],
+                            now=current,
+                        )
+                    )
+        return stale
+
+    @app.post("/api/books/{book_id}/export", status_code=202)
+    async def export_book(book_id: str, body: BookExportRequest, s: S) -> JobCreated:
+        """Lay the book out. Unless `allow_draft`, every page must be approved."""
+        book = _book_or_404(s, book_id)
+        pages = s.db.list_pages(book_id)
+        if not pages:
+            raise HTTPException(409, f"book {book_id!r} has no pages")
+        if not body.allow_draft and (waiting := [p.number for p in pages if p.status != "approved"]):
+            raise HTTPException(409, f"pages {waiting} are not approved; approve them or pass allow_draft")
+        if not any(p.image_asset_id for p in pages):
+            raise HTTPException(409, f"book {book_id!r} has no chosen pictures")
+        params = {"book_id": book_id, "format": body.format, "description": f"{book.title} ({body.format})", "count": 1}
+        job = s.db.create_job(book.project_id, "book_export", "none", params)
+        s.queue.notify()
+        return JobCreated(job_id=job.id)
+
     # --- assets ---------------------------------------------------------------------------------
 
     @app.get("/api/assets")
     async def list_assets(
         s: S,
         project: str | None = None,
-        kind: Literal["sprite", "icon", "bgm", "animation"] | None = None,
+        kind: AssetKind | None = None,
         status: AssetStatus | None = None,
         job_id: str | None = None,
     ) -> list[AssetOut]:

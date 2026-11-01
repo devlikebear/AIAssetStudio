@@ -177,7 +177,7 @@ def test_v1_database_is_upgraded_in_place(tmp_path):
     old.close()
 
     db = Database(path)
-    assert db.schema_version() == 2
+    assert db.schema_version() == SCHEMA_VERSION
     p = db.get_project("lastlight")
     assert (p.name, p.pixel_art, p.logical_width, p.animation_cloud) == ("LAST LIGHT", True, 32, False)
     job = db.get_job("job1")

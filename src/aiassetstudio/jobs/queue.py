@@ -23,6 +23,8 @@ COMFYUI_DOWN = "comfyui_down"
 # they do not change which models are loaded. The MVP still runs them in this one queue, so GPU jobs wait behind
 # them (roadmap Out of Scope: a separate cloud queue).
 CLOUD_FAMILIES = ("codex",)
+# Jobs that use neither ComfyUI nor the GPU (laying out a book). They wait in the queue like the rest but touch nothing.
+LOCAL_FAMILIES = ("none",)
 
 
 class JobQueue:
@@ -163,7 +165,7 @@ class JobQueue:
                 final["timings"] = (self.db.get_job(job.id).timings or {}) | {"free_before": True}
             self.db.update_job(job.id, **final)
             log.info("job %s %s%s", job.id, status, f": {error}" if error else "")
-            if not comfy_down and job.family not in CLOUD_FAMILIES:
+            if not comfy_down and job.family not in (*CLOUD_FAMILIES, *LOCAL_FAMILIES):
                 self.current_family = job.family
                 self.models_loaded = True
         finally:
@@ -173,6 +175,9 @@ class JobQueue:
             self._run_done.set()
 
     async def _start_comfy_then_run(self, runner: Runner, ctx: RunContext, job: Job, timeout: float) -> None:
+        if job.family in LOCAL_FAMILIES:
+            await asyncio.wait_for(runner(ctx, job), timeout)
+            return
         if job.family in CLOUD_FAMILIES:
             # The GPU sits unused for the minutes this job takes, yet the idle /free cannot run while the worker is
             # busy: give the shared GPU back now, as the idle rule would.

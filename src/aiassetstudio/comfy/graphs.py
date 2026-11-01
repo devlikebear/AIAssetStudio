@@ -1,5 +1,6 @@
 """ComfyUI API-format graphs. Node names and inputs match ComfyUI 0.37.0 (verified in spikes/rgba_test.py)."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -35,8 +36,15 @@ def _vae_node() -> dict:
     return {"class_type": "VAELoader", "inputs": {"vae_name": QWEN_VAE}}
 
 
-def _qwen_text_nodes(prompt: str, ref: Reference | None = None) -> dict:
-    """The text-encoding nodes ("3", "5", and with a reference "15", "16" and in latent mode "4").
+def _as_refs(ref: Reference | Sequence[Reference] | None) -> tuple[Reference, ...]:
+    if ref is None:
+        return ()
+    return (ref,) if isinstance(ref, Reference) else tuple(ref)
+
+
+def _qwen_text_nodes(prompt: str, ref: Reference | Sequence[Reference] | None = None) -> dict:
+    """The text-encoding nodes ("3", "5", and with a reference "15", "16" and in latent mode "4"; more references
+    add "32", "42", "33", "43"...).
 
     qwen_text_encode() and qwen_t2i_turbo() must build them identically so that ComfyUI reuses the cached
     conditioning of the first in the second.
@@ -46,18 +54,19 @@ def _qwen_text_nodes(prompt: str, ref: Reference | None = None) -> dict:
         "3": {"class_type": "CLIPLoader", "inputs": {"clip_name": QWEN_TE, "type": "qwen_image", "device": "default"}},
         "5": {"class_type": "TextEncodeQwenImage21", "inputs": encode_inputs},
     }
-    if ref is not None:
+    for i, reference in enumerate(_as_refs(ref), 1):
+        load, join = ("15", "16") if i == 1 else (f"3{i}", f"4{i}")
         # LoadImage splits RGBA into RGB and a mask of 1 - alpha; JoinImageWithAlpha turns it back into RGBA.
-        nodes["15"] = {"class_type": "LoadImage", "inputs": {"image": ref.image}}
-        nodes["16"] = {"class_type": "JoinImageWithAlpha", "inputs": {"image": ["15", 0], "alpha": ["15", 1]}}
-        encode_inputs["images.image_1"] = ["16", 0]
-        if ref.mode == "latent":
+        nodes[load] = {"class_type": "LoadImage", "inputs": {"image": reference.image}}
+        nodes[join] = {"class_type": "JoinImageWithAlpha", "inputs": {"image": [load, 0], "alpha": [load, 1]}}
+        encode_inputs[f"images.image_{i}"] = [join, 0]
+        if reference.mode == "latent":
             encode_inputs["vae"] = ["4", 0]
             nodes["4"] = _vae_node()
     return nodes
 
 
-def qwen_text_encode(prompt: str, ref: Reference | None = None) -> dict:
+def qwen_text_encode(prompt: str, ref: Reference | Sequence[Reference] | None = None) -> dict:
     """Only the text encoding of `prompt` (and the reference), so ComfyUI caches the conditioning.
     PreviewAny is just the output node a graph needs; it prints a short summary of the tensor."""
     return {
@@ -72,10 +81,10 @@ def qwen_t2i_turbo(
     prefix: str,
     width: int = 1024,
     height: int = 1024,
-    ref: Reference | None = None,
+    ref: Reference | Sequence[Reference] | None = None,
     cache_cpu: bool = False,
 ) -> dict:
-    """Qwen-Image-2.1 text-to-image with the Viggle Turbo 6-step LoRA, optionally with a style reference.
+    """Qwen-Image-2.1 text-to-image with the Viggle Turbo 6-step LoRA, optionally with references.
     Output: SaveImage node "9". The latent size comes from EmptyLatentImage, not from the reference: this is a
     style reference, not an edit, so the output need not follow the reference's aspect ratio."""
     graph = {

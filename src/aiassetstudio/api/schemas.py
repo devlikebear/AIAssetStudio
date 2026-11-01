@@ -7,9 +7,12 @@ from pydantic import BaseModel, BeforeValidator, Field, StringConstraints, field
 
 from ..comfy.graphs import KEYSCALES
 from ..store.files import SLUG_PATTERN
-from ..store.models import Asset, AssetStatus, Job
+from ..store.models import Asset, AssetStatus, Book, Job, Page, Sheet, SheetKind, Term
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+LongText = Annotated[str, StringConstraints(strip_whitespace=True, max_length=4000)]
+PictureSide = Annotated[int, Field(ge=512, le=1536, multiple_of=16)]
+PageNumber = Annotated[int, Field(ge=1, le=999)]
 Style = Annotated[str, StringConstraints(strip_whitespace=True, max_length=2000)]
 LogicalSize = Annotated[int, Field(ge=8, le=256)]
 ColorCount = Annotated[int, Field(ge=2, le=64)]
@@ -145,3 +148,96 @@ class AssetOut(Asset):
 
 class JobOut(Job):
     assets: list[AssetOut] = Field(default_factory=list)
+
+
+class BookCreate(BaseModel):
+    project: str
+    title: Name
+    source: dict | None = None  # where the work comes from: {"system", "work_id", "label"}; shown, never fetched
+    width: PictureSide = 1184  # the size of the 2026-11-01 trial, near 4:3; Qwen-Image keeps a 16 px grid
+    height: PictureSide = 880
+
+
+class BookUpdate(BaseModel):
+    title: Name | None = None
+    cover_page: PageNumber | None = None
+
+
+class SourceRef(BaseModel):
+    node_id: str
+    content_version: int
+    label: str = ""
+
+
+class PageIn(BaseModel):
+    number: PageNumber
+    text: LongText = ""
+    image_prompt: LongText = ""
+    people: list[Name] = Field(default_factory=list)
+    props: list[Name] = Field(default_factory=list)
+    place: Annotated[str, StringConstraints(strip_whitespace=True, max_length=500)] | None = None
+    source_refs: list[SourceRef] = Field(default_factory=list)
+
+
+class SheetIn(BaseModel):
+    kind: SheetKind
+    name: Name
+    description: Annotated[str, StringConstraints(strip_whitespace=True, max_length=2000)] = ""
+    asset_id: str | None = None
+
+
+class TermIn(BaseModel):
+    term: Name
+    spoken: Name
+
+
+class PageUpdate(BaseModel):
+    status: Literal["approved", "redo", "draft"] | None = None
+    note: LongText | None = None
+    image_asset_id: str | None = None
+
+
+class GeneratePages(BaseModel):
+    pages: list[PageNumber] | None = None  # default: the pages in draft or redo
+    seed: int | None = Field(None, ge=0, le=2**53)  # default: a new one per page
+
+
+class GenerateSheet(BaseModel):
+    seed: int | None = Field(None, ge=0, le=2**53)
+
+
+class JobsCreated(BaseModel):
+    job_ids: list[str]
+
+
+class CheckSources(BaseModel):
+    versions: dict[str, int]  # node id -> its content_version now, read by the caller
+
+
+class StalePage(BaseModel):
+    number: int
+    node_id: str
+    label: str
+    was: int
+    now: int | None  # None: the caller did not list this passage
+
+
+class BookExportRequest(BaseModel):
+    format: Literal["pdf"] = "pdf"
+    allow_draft: bool = False  # lay out pages that were not approved
+
+
+class PageOut(Page):
+    candidates: list[AssetOut] = Field(default_factory=list)
+
+
+class SheetOut(Sheet):
+    asset: AssetOut | None = None
+
+
+class BookOut(Book):
+    pages: list[PageOut]
+    sheets: list[SheetOut]
+    terms: list[Term]
+    counts: dict[str, int]  # page status -> pages
+    license_class: str | None  # of the chosen pictures; None until one is chosen

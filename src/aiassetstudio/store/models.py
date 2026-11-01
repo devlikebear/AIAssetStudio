@@ -4,11 +4,13 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-JobKind = Literal["image", "bgm", "animation"]
-Family = Literal["qwen", "ace", "yue2", "codex"]  # codex: cloud, no GPU
+JobKind = Literal["image", "bgm", "animation", "page_image", "book_export"]
+Family = Literal["qwen", "ace", "yue2", "codex", "none"]  # codex: cloud, no GPU; none: on this PC, no GPU
 JobStatus = Literal["queued", "running", "done", "failed", "cancelled"]
-AssetKind = Literal["sprite", "icon", "bgm", "animation"]
+AssetKind = Literal["sprite", "icon", "bgm", "animation", "page_image", "book_export"]
 AssetStatus = Literal["candidate", "selected", "rejected"]
+PageStatus = Literal["draft", "queued", "candidate", "approved", "redo"]
+SheetKind = Literal["character", "place", "prop"]
 
 TERMINAL_STATUSES: tuple[JobStatus, ...] = ("done", "failed", "cancelled")
 
@@ -59,3 +61,52 @@ class Asset(BaseModel):
     files: dict[str, str]  # file role ("raw", "processed", "preview") -> path relative to data_dir
     meta: dict
     created_at: str
+
+
+class Book(BaseModel):
+    """One work being made into a picture book. `source` says where it came from; Studio never reads that system."""
+
+    id: str
+    project_id: int
+    project: str  # slug
+    title: str
+    source: dict | None = None
+    width: int
+    height: int
+    cover_page: int | None = None  # page number whose picture is the cover; None = the first page
+    created_at: str
+    updated_at: str
+
+
+class Page(BaseModel):
+    id: str
+    book_id: str
+    number: int
+    text: str = ""
+    image_prompt: str = ""
+    people: list[str] = []  # names of character sheets, the most important first
+    props: list[str] = []  # names of prop sheets, or plain descriptions
+    place: str | None = None  # name of a place sheet, or a plain description
+    source_refs: list[dict] = []  # [{"node_id", "content_version", "label"}]: the passages the page rests on
+    image_asset_id: str | None = None  # the chosen picture
+    status: PageStatus = "draft"
+    note: str | None = None  # the person's request for a redo, for the agent to read
+    created_at: str
+    updated_at: str
+
+
+class Sheet(BaseModel):
+    """A character, place or prop the pages keep the same."""
+
+    id: str
+    book_id: str
+    kind: SheetKind
+    name: str
+    description: str = ""
+    asset_id: str | None = None  # its picture, used as a reference
+    created_at: str
+
+
+class Term(BaseModel):
+    term: str
+    spoken: str  # how to write it so the narrator says it right

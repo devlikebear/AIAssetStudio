@@ -26,6 +26,7 @@ class Settings:
     sprite_gen: str = str(SIBLING_DIR / "sprite-gen" / ".venv" / "Scripts" / "sprite-gen.exe")  # animations (own venv)
     codex_dir: str = ""  # folder of the codex CLI for sprite-gen; empty = find_codex_dir's search
     animation_timeout: float = 900  # seconds
+    book_font: str = r"C:\Windows\Fonts\batang.ttc"  # the text of exported books; a .ttf or a .ttc, first face
 
 
 # field -> (environment variable, converter)
@@ -43,6 +44,7 @@ _ENV = {
     "sprite_gen": ("AIAS_SPRITE_GEN", str),
     "codex_dir": ("AIAS_CODEX_DIR", str),
     "animation_timeout": ("AIAS_ANIMATION_TIMEOUT", float),
+    "book_font": ("AIAS_BOOK_FONT", str),
 }
 
 
