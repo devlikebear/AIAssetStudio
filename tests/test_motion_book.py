@@ -231,3 +231,24 @@ async def test_the_tools_talk_about_clips(settings, fake_comfy):
         shown = await tools.get_book(api, book["id"])
         assert any(isinstance(item, str) and "last frame of clip" in item for item in shown)
         await api.aclose()
+
+
+def test_a_failed_model_read_is_tried_again_once(client, fake_comfy):  # noqa: F811
+    book = picture_book(client, "글")
+    fake_comfy.fail_once = "HostBuffer.read_file_slice failed"
+    fake_comfy.free_calls.clear()
+    [job] = animate(client, book["id"])
+    assert job["status"] == "done", job
+    assert "retried after" in job["assets"][0]["meta"]["warnings"][0]
+    unload = {"unload_models": True, "free_memory": False}
+    assert fake_comfy.free_calls[-2:] == [unload, unload]  # after the encode, and again before the second try
+
+
+def test_another_failure_of_a_clip_is_not_tried_again(client, fake_comfy):  # noqa: F811
+    book = picture_book(client, "글")
+    fake_comfy.fail_once = "CUDA out of memory."
+    [job] = animate(client, book["id"])
+    assert job["status"] == "failed"
+    assert "out of memory" in job["error"]
+    [page] = client.get(f"/api/books/{book['id']}").json()["pages"]
+    assert page["clip_status"] == "draft"

@@ -449,10 +449,13 @@ async def set_page_motion(
         Field(description="full: the whole clip; head: its first seconds; still: no clip, the picture zooming slowly"),
     ] = None,
     clip_head_s: Annotated[float | None, Field(ge=0.5, le=5, description="Seconds of the clip that head uses")] = None,
+    clip_asset_id: Annotated[str | None, Field(description="Choose this clip of the page")] = None,
 ) -> str:
     """Set what moves on a page and how the page is shown in the video. Changing the motion makes its clip out of date.
     The person approves it in the gallery."""
-    return await _call(tools.set_page_motion, page_id, motion_prompt, motion_still, clip_method, clip_head_s)
+    return await _call(
+        tools.set_page_motion, page_id, motion_prompt, motion_still, clip_method, clip_head_s, clip_asset_id
+    )
 
 
 @mcp.tool(structured_output=False)

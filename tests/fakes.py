@@ -94,8 +94,11 @@ class FakeComfy:
         models: dict[str, set[str]] | None = None,
         image_size: int = 256,
         audio_seconds: float | None = None,  # song length; default: what the graph asked for
+        fail_once: str | None = None,  # the next prompt of a sampler ends in this error, the ones after it run
     ):
         self.fail_with = fail_with
+        self.fail_once = fail_once
+        self.error_message = "CUDA out of memory."
         self.down = down
         self.nodes = set(ALL_NODES if nodes is None else nodes)
         self.models = {k: set(v) for k, v in (ALL_MODELS if models is None else models).items()}
@@ -186,7 +189,11 @@ class FakeComfy:
             )
         pid = body.get("prompt_id") or str(uuid.uuid4())
         self.prompts[pid] = body["prompt"]
-        if self.fail_with == "error":
+        sampling = any(node["class_type"] == "KSamplerAdvanced" for node in body["prompt"].values())
+        if self.fail_once and sampling:
+            self.error_message, self.fail_once = self.fail_once, None
+            self.history[pid] = self._entry(pid, "error")
+        elif self.fail_with == "error":
             self.history[pid] = self._entry(pid, "error")
         elif self.fail_with != "hang":
             self.history[pid] = self._entry(pid, "success")
@@ -243,7 +250,7 @@ class FakeComfy:
                     "node_id": "14",
                     "node_type": "SamplerCustomAdvanced",
                     "exception_type": "torch.OutOfMemoryError",
-                    "exception_message": "CUDA out of memory.",
+                    "exception_message": self.error_message,
                 },
             ]
         return {"outputs": {}, "status": {"status_str": "error", "completed": False, "messages": [start, msg]}}

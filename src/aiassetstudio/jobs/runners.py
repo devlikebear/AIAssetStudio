@@ -14,7 +14,7 @@ from pathlib import Path
 from PIL import Image
 
 from ..book_prompts import clip_prompt, page_prompt, sheet_prompt
-from ..comfy.client import ComfyClient, ComfyError, output_files
+from ..comfy.client import ComfyClient, ComfyError, ComfyExecutionError, output_files
 from ..comfy.graphs import (
     ACE_MODELS,
     ACE_OUTPUT_NODE,
@@ -119,6 +119,9 @@ CLOUD_SENT = ["the base sprite, enlarged", "sprite-gen's layout guides", "sprite
 
 PAGE_GAP_S = 1.2  # between pages of an audiobook, as in the 2026-11-01 trial
 CLIP_FILES = {"mp4": "clip.mp4", "first": "first.png", "last": "last.png", "preview": "preview.png"}
+# Windows error 1450 reading a video model: 3 of about 25 clips on 2026-11-01 and 02, with free commit near zero while
+# the page file grew. The same prompt then ran.
+MODEL_READ_FAILED = "read_file_slice failed"
 LOW_RAM_GB = 6  # the trial started clips with 8-10 GB free and fell to 1.8 GB
 
 
@@ -718,11 +721,23 @@ async def run_clip_job(ctx: RunContext, job: Job) -> None:
         raise JobCancelled()
     ctx.db.update_job(job.id, stage="generating")
     asset_id = new_id()
+    t0 = time.monotonic()
+    graph = wan_i2v_lightning(prompt, image, seed, f"{project.slug}_{asset_id}")
     prompt_id = str(uuid.uuid4())
     ctx.prompt_ids.append(prompt_id)
-    t0 = time.monotonic()
-    await ctx.comfy.submit(wan_i2v_lightning(prompt, image, seed, f"{project.slug}_{asset_id}"), prompt_id=prompt_id)
-    entry = await ctx.comfy.wait(prompt_id, timeout=ctx.settings.clip_timeout, poll=2.0)
+    await ctx.comfy.submit(graph, prompt_id=prompt_id)
+    try:
+        entry = await ctx.comfy.wait(prompt_id, timeout=ctx.settings.clip_timeout, poll=2.0)
+    except ComfyExecutionError as e:
+        if MODEL_READ_FAILED not in str(e):
+            raise
+        warnings.append(f"retried after: {e}")
+        ctx.db.update_job(job.id, stage="generating (second try)")
+        await ctx.comfy.free(unload_models=True, free_memory=False)
+        prompt_id = str(uuid.uuid4())
+        ctx.prompt_ids.append(prompt_id)
+        await ctx.comfy.submit(graph, prompt_id=prompt_id)
+        entry = await ctx.comfy.wait(prompt_id, timeout=ctx.settings.clip_timeout, poll=2.0)
     t1 = time.monotonic()
     videos = output_files(entry, WAN_OUTPUT_NODE)
     if not videos:

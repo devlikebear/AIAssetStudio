@@ -65,7 +65,7 @@ def sheet_prompt(style: str, sheet: Sheet) -> str:
 
 # At CFG 1 a negative prompt does nothing, so these limits are stated in the prompt (2026-11-01 trial).
 STAY_IN_PLACE = "Everyone stays in exactly the same place facing the same way. Nobody walks, leaves or turns around. "
-STAY_IN_PLACE += "Only small natural movement."
+STAY_IN_PLACE += "Nobody else enters the picture. Only small natural movement."
 KEEP_STYLE = "The painted style stays the same, gentle natural motion, static composition."
 
 

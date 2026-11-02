@@ -512,8 +512,10 @@ async def set_page_motion(
     motion_still: bool | None = None,
     clip_method: str | None = None,
     clip_head_s: float | None = None,
+    clip_asset_id: str | None = None,
 ) -> str:
     fields = {
+        "clip_asset_id": clip_asset_id,
         "motion_prompt": motion_prompt,
         "motion_still": motion_still,
         "clip_method": clip_method,
