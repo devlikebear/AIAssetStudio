@@ -52,8 +52,10 @@ look at each clip's last frame, then ask the user to play them in the gallery an
 approval, picture and narration -> export_book(format="mp4"). Writing motion_prompt, in English: one small movement
 (water, wind, a hand), never a story. A negative prompt does nothing here, so keep motion_still on unless someone must
 really move. Clips lose small traits and let people drift late in their 5 s: if a small trait matters to the story on
-that page, set clip_method "still", which shows the approved picture slowly zooming. A clip plays once and its last
-frame holds for the rest of the page, so that frame must be good; if only the start is good, use "head"."""
+that page, set clip_method "still", which shows the approved picture slowly zooming. Where a picture has empty space
+beside one or two people, clips walk strangers into it from about 1.5 s, and saying not to does not help: use "still"
+there rather than retrying. A clip plays once and its last frame holds for the rest of the page, so that frame must be
+good; if only the start is good, use "head"."""
 
 mcp = MCPServer("aiassetstudio", instructions=INSTRUCTIONS)
 _api: StudioApi | None = None
