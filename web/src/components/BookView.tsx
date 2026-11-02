@@ -91,7 +91,10 @@ export function BookView({ bookId, onError }: Props) {
   const toNarrate = data.pages.filter((p) => p.text && (p.narration_status === 'draft' || p.narration_status === 'redo'))
   const speechReady = speech.data?.status === 'installed'
   const shown = data.clip_counts.approved ?? 0
-  const waitingClips = data.pages.filter((page) => page.clip_status === 'candidate' && page.clip_asset_id)
+  // A page shown as its picture has no clip to wait for, only the verdict.
+  const waitingClips = data.pages.filter(
+    (p) => (p.clip_status === 'candidate' || p.clip_status === 'draft') && (p.clip_method === 'still' ? p.image_asset_id : p.clip_asset_id),
+  )
   const toAnimate = data.pages.filter(
     (p) => p.status === 'approved' && p.motion_prompt && p.clip_method !== 'still' && (p.clip_status === 'draft' || p.clip_status === 'redo'),
   )
