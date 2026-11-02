@@ -45,7 +45,7 @@ _예상 소요: 약 22시간_
 
 ### 작업 그룹 B: 엔진과 모델 팩
 
-- [ ] **T3.B.1** — `engine-comfyui` 팩
+- [x] **T3.B.1** — `engine-comfyui` 팩
   - 파일: `packs/catalog/engine-comfyui.json`, `packs/manager.py`, `config.py`, `tests/test_pack_manager.py`
   - 내용:
     - `engine: comfy_engine`. T1.A.3에서 정한 고정 태그(기본 `v0.37.0`)를 `data/packs/engine-comfyui/ComfyUI`에 clone하고 uv venv를 만든다. 이미지와 영상 그래프를 그 버전에서 다시 검증한다. 허용 호스트에 `github.com/comfyanonymous/ComfyUI`를 추가한다.
@@ -54,7 +54,7 @@ _예상 소요: 약 22시간_
     - `Settings`에서 설치된 팩을 `comfy_dir`로 찾는 `resolve_comfy()`를 추가한다.
   - 검증: `uv run pytest tests/test_pack_manager.py`, 임시 데이터 폴더에서 수동 설치
 
-- [ ] **T3.B.2** — `image-qwen21`, `video-wan22` 팩
+- [x] **T3.B.2** — `image-qwen21`, `video-wan22` 팩
   - 파일: `packs/catalog/image-qwen21.json`, `packs/catalog/video-wan22.json`, `comfy/preflight.py`, `tests/test_preflight.py`
   - 내용:
     - `engine: comfy_models`. 파일은 현재 ComfyUI의 `models/<folder>/`에 넣고 `pack_installs.files`에 기록한다. 기존 파일이 있고 sha256이 같으면 내려받지 않고, 삭제 때도 지우지 않는다(`adopted` 표시).
@@ -67,7 +67,7 @@ _예상 소요: 약 22시간_
     - `SaveVideo` 필수 입력은 `video, filename_prefix, format`이다(0.37.0 기준).
   - 검증: `uv run pytest tests/test_preflight.py`
 
-- [ ] **T3.B.3** — 스프라이트와 아이콘을 공식 Turbo로 전환
+- [x] **T3.B.3** — 스프라이트와 아이콘을 공식 Turbo로 전환
   - 파일: `comfy/graphs.py`, `jobs/runners.py`, `comfy/preflight.py`, `tests/test_runners.py`, `tests/gpu/`
   - 이유: 새 PC의 `image-qwen21` 팩에는 Viggle이 없다. 인물 시트도 스프라이트 경로로 만든다.
   - 내용: `run_image_job`의 그래프를 `qwen_book_page`와 같은 구성으로 바꾼다. 투명 출력은 시험에서 확인했지만 픽셀아트 격자, 참조 이미지, 애니메이션 기준 그림의 회귀는 확인하지 않았다. 기존 GPU 테스트와 LAST LIGHT 프로젝트로 비교한 뒤 바꾼다. 결과가 달라지면 Viggle이 있는 외부 ComfyUI 경로를 유지할지 사용자와 정한다.
@@ -75,12 +75,12 @@ _예상 소요: 약 22시간_
 
 ### 작업 그룹 C: 클립
 
-- [ ] **T3.C.1** — Wan 그래프
+- [x] **T3.C.1** — Wan 그래프
   - 파일: `comfy/graphs.py`, `tests/test_graphs.py`
   - 내용: `spikes/studio/render_video.py`의 `graph()`를 `wan_i2v_lightning(prompt, image, seed, prefix, width, height, frames)`로 옮긴다. 상수 주석에 실측을 적는다(832×624, 81프레임, 클립당 약 190초, RAM 여유 최저 1.8GB). 부정 프롬프트는 CFG 1에서 무시된다고 주석에 남긴다.
   - 검증: `uv run pytest tests/test_graphs.py`
 
-- [ ] **T3.C.2** — `clip` 실행기
+- [x] **T3.C.2** — `clip` 실행기
   - 파일: `store/db.py`, `jobs/runners.py`, `jobs/queue.py`, `config.py`, `api/app.py`, `tests/test_runners.py`
   - 내용:
     - `pages`에 `motion_prompt, motion_still(bool), clip_asset_id, clip_status, clip_method, clip_head_s`.
@@ -90,7 +90,7 @@ _예상 소요: 약 22시간_
     - `AssetKind`에 `clip`. 파일: mp4, 첫 프레임, 끝 프레임 PNG.
   - 검증: `uv run pytest tests/test_runners.py`
 
-- [ ] **T3.C.3** — 클립 검수 화면과 MCP
+- [x] **T3.C.3** — 클립 검수 화면과 MCP
   - 파일: `web/src/components/PageCard.tsx`, `mcp_bridge/server.py`, `tools.py`, `tests/test_mcp_tools.py`
   - 내용:
     - 쪽 카드에 영상 탭: `<video>`, 첫·끝 프레임, 표현 방식(`full`, `head`, `still`), 앞부분 초 입력, 채택, 재작업 메모.
@@ -101,7 +101,7 @@ _예상 소요: 약 22시간_
 
 ### 작업 그룹 D: 합치기
 
-- [ ] **T3.D.1** — 영상 조립
+- [x] **T3.D.1** — 영상 조립
   - 파일: `src/aiassetstudio/post/video.py`(신규), `jobs/runners.py`, `tests/test_post_video.py`
   - 내용:
     - `spikes/studio/assemble_video.py`를 옮긴다.
@@ -114,19 +114,36 @@ _예상 소요: 약 22시간_
     - `worst_class`가 `research_only`나 `unknown`이면 마지막 화면과 응답에 사용 모델을 표시한다.
   - 검증: `uv run pytest tests/test_post_video.py`
 
+## 구현 메모 (2026-11-02)
+
+지시서와 달라진 점이다.
+
+- 순서를 바꿔 클립과 영상 조립을 먼저 하고 팩을 뒤에 했다. 이 PC에서 바로 결과를 볼 수 있어서다.
+- 사용자 판단(T3.A.1)대로 클립은 왕복하지 않는다. `loop_mode`를 두지 않고 `hold`만 구현했다.
+- 자막은 쪽 전체가 아니라 문장 단위로 나눠 글자 수 비율로 시간을 준다. 현재 대본은 쪽당 약 150자라 한 번에 띄우면 그림을 가린다. 낱말 시각이 없어 낭독과 정확히 맞지는 않는다.
+- `pages`에 `clip_note`를 더했다. 그림이나 움직임이 바뀌면 클립이 `draft`로 돌아간다. 클립 후보는 메타 키 `clip_page_id`로 찾는다.
+- Wan 텍스트 인코딩을 별도 프롬프트로 먼저 끝내고 내린다. 한 프롬프트로 돌리면 인코더 6.7GB가 영상 모델과 함께 RAM에 남아 커밋 여유가 0.1GB까지 떨어졌다. 분리 후 클립당 약 210초가 약 180초로 줄었다.
+- 그래도 약 25번 중 3번 Windows 오류 1450(`read_file_slice failed`)이 났다. 메모리를 내리고 같은 프롬프트를 한 번 자동 재시도한다. 재시도 경로는 실제 오류로는 아직 확인하지 않았고 자동 테스트로만 확인했다.
+- 끝 프레임 말고도 중간 프레임을 봐야 한다. 빈 공간이 있는 그림(이번 책의 3, 4, 11쪽)은 시드를 바꿔도 약 1.5초부터 화면 밖에서 사람이 걸어 들어왔다. "다른 사람이 들어오지 않는다"는 문구도 효과가 없어 되돌렸다. 이런 쪽은 `still`을 쓴다.
+- 팩 파일의 저장소는 `Comfy-Org/Wan_2.2_ComfyUI_Repackaged`로 적었다. `Comfy-Org/Wan-2.2`와 같은 리비전이다.
+- 엔진 팩 삭제는 모델 팩이 그 안에 있으면 거절한다. 이미 있는 다른 내용의 모델 파일은 덮어쓰지 않고 설치를 실패시킨다.
+- 스프라이트 전환 비교는 `spikes/studio/sprite_turbo.py`다. 5개 대상을 시드 2개로 뽑았고 투명 배경, 픽셀 격자, 참조 화풍이 유지되며 25~30% 빨랐다. 계열은 `qwen_turbo`로 합쳤고, 옛 Viggle 그래프는 시험 스크립트와 옛 기록을 위해 남겼다.
+- 실제 설치 측정(동의 절차를 건너뛰고 단계만 호출): 엔진 84초, 4.03GB, ComfyUI 0.37.0 응답과 필요한 노드 확인. 이 PC의 모델 9개는 해시가 일치해 42초 만에 재사용으로 끝났다.
+- 12쪽 영상 조립은 55초, 5분 27초, 53.3MiB다.
+
 ---
 
 ### ✅ Checkpoint: Phase 3 완료 확인
 
 **구현 확인:**
-- [ ] 외부 ComfyUI가 있으면 팩 설치를 요구하지 않고 수정하지도 않는다.
-- [ ] `adopted` 파일은 팩 삭제 후에도 남는다.
-- [ ] 영상 길이가 낭독 길이와 프레임 단위로 일치하고 쪽 경계에서 자막이 어긋나지 않는다.
-- [ ] 기존 공정과 팩이 그대로 동작한다.
+- [x] 외부 ComfyUI가 있으면 팩 설치를 요구하지 않고 수정하지도 않는다.
+- [x] `adopted` 파일은 팩 삭제 후에도 남는다.
+- [x] 영상 길이가 낭독 길이와 프레임 단위로 일치하고 쪽 경계에서 자막이 어긋나지 않는다.
+- [x] 기존 공정과 팩이 그대로 동작한다.
 
 **실행 확인:**
-- [ ] `uv run pytest`, `uv run ruff check .`, `npm run lint`, `npm run build`
-- [ ] GPU 종단검증 `uv run pytest -m gpu tests/gpu/test_motion_book.py`: 2쪽
+- [x] `uv run pytest`, `uv run ruff check .`, `npm run lint`, `npm run build`
+- [x] GPU 종단검증 `uv run pytest -m gpu tests/gpu/test_motion_book.py`: 2쪽, 8분 6초
 
 **수동 확인:**
 - [ ] 임시 데이터 폴더에서 ComfyUI, 이미지, 영상 팩을 순서대로 설치해 1쪽짜리 영상을 만든다.
