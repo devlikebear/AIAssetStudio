@@ -6,7 +6,7 @@ from fakes import ALL_MODELS, ALL_NODES, FakeComfy
 import aiassetstudio.comfy.client as client_module
 from aiassetstudio import cli
 from aiassetstudio.cli import main
-from aiassetstudio.comfy.graphs import VIGGLE_LORA
+from aiassetstudio.comfy.graphs import QWEN_BOOK_UNET
 from aiassetstudio.mcp_bridge.studio_api import BackendError, StudioApi
 from aiassetstudio.store.db import SCHEMA_VERSION
 
@@ -23,18 +23,18 @@ def test_check_ok(monkeypatch, capsys):
     assert run_check(monkeypatch, FakeComfy()) == 0
     out = capsys.readouterr().out
     assert "ComfyUI: up" in out and "version 0.37.0" in out
-    assert "qwen: ok" in out
+    assert "qwen_turbo: ok" in out
 
 
 def test_check_names_what_is_missing(monkeypatch, capsys):
     models = {k: set(v) for k, v in ALL_MODELS.items()}
-    models["loras"].discard(VIGGLE_LORA)
-    fake = FakeComfy(nodes=ALL_NODES - {"ViggleTurboSigmas"}, models=models)
+    models["diffusion_models"].discard(QWEN_BOOK_UNET)
+    fake = FakeComfy(nodes=ALL_NODES - {"ManualSigmas"}, models=models)
     assert run_check(monkeypatch, fake) == 1
     out = capsys.readouterr().out
-    assert "qwen: not ready" in out
-    assert "missing node:  ViggleTurboSigmas" in out
-    assert f"missing model: loras/{VIGGLE_LORA}" in out
+    assert "qwen_turbo: not ready" in out
+    assert "missing node:  ManualSigmas" in out
+    assert f"missing model: diffusion_models/{QWEN_BOOK_UNET}" in out
 
 
 def test_serve_warns_when_reachable_from_other_machines(monkeypatch, caplog, tmp_path):
@@ -55,7 +55,7 @@ def test_check_comfyui_down(monkeypatch, capsys):
     assert run_check(monkeypatch, FakeComfy(down=True)) == 1
     out = capsys.readouterr().out
     assert "ComfyUI: down" in out
-    assert "qwen: not ready (comfyui_down)" in out
+    assert "qwen_turbo: not ready (comfyui_down)" in out
 
 
 class FakeApi:

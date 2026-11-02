@@ -4,7 +4,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-# Qwen-Image-2.1 model files (ComfyUI models/ subfolders in comments).
+# Qwen-Image-2.1 model files (ComfyUI models/ subfolders in comments). The UNET, the LoRA and the graphs built on them
+# are how images were made before the official Turbo; only spikes and the records of old assets use them now.
 QWEN_UNET = "qwen_image_2.1_int8_convrot.safetensors"  # diffusion_models
 QWEN_TE = "qwen3vl_8b_int8_convrot.safetensors"  # text_encoders
 QWEN_VAE = "qwen_image_2.1_vae_bf16.safetensors"  # vae (4-channel RGBA)
@@ -17,9 +18,11 @@ QWEN_TURBO_STEPS = 6
 QWEN_TURBO_SIGMAS = "1.0, 0.9375, 0.875, 0.75, 0.5, 0.25"
 QWEN_SAMPLER = "euler"
 
-# The official Qwen-Image-2.1-Turbo, for books: no LoRA or custom node (spikes/studio/official_turbo.py, 2026-11-01:
+# The official Qwen-Image-2.1-Turbo, for every image: no LoRA or custom node (spikes/studio/official_turbo.py, 2026-11-01:
 # 13 s a 1184x880 picture with three references, against Viggle's 20 s, same faces and places). The schedule is the
 # one saved in the checkpoint; ComfyUI 0.37.0 does not read it from there. CFG is 1: BasicGuider has no negative prompt.
+# Sprites and icons moved to it after spikes/studio/sprite_turbo.py (2026-11-02): same transparency, pixel grid and
+# reference style, 25-30% faster.
 QWEN_BOOK_UNET = "qwen_image_2.1_turbo_int8_convrot.safetensors"  # diffusion_models
 QWEN_BOOK_MODELS = {"unet": QWEN_BOOK_UNET, "text_encoder": QWEN_TE, "vae": QWEN_VAE}
 QWEN_BOOK_STEPS = 8
@@ -163,7 +166,7 @@ def qwen_book_page(
     height: int,
     refs: Sequence[Reference] = (),
 ) -> dict:
-    """A book's picture with the official Turbo checkpoint. Output: SaveImage node "9". With references the KV cache
+    """A picture, sprite or icon with the official Turbo checkpoint. Output: SaveImage node "9". With references the KV cache
     stays in RAM, as in qwen_t2i_turbo."""
     graph = {
         "1": {"class_type": "UNETLoader", "inputs": {"unet_name": QWEN_BOOK_UNET, "weight_dtype": "default"}},

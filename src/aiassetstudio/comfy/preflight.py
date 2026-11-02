@@ -14,9 +14,7 @@ from .graphs import (
     ACE_VAE,
     QWEN_BOOK_UNET,
     QWEN_TE,
-    QWEN_UNET,
     QWEN_VAE,
-    VIGGLE_LORA,
     WAN_LORA_HIGH,
     WAN_LORA_LOW,
     WAN_TE,
@@ -45,33 +43,6 @@ class FamilyStatus:
 
 
 REQUIRED: dict[str, Requirement] = {
-    "qwen": Requirement(
-        nodes=(
-            "UNETLoader",
-            "CLIPLoader",
-            "VAELoader",
-            "TextEncodeQwenImage21",
-            "EmptyLatentImage",
-            "ViggleTurboLora",
-            "BasicGuider",
-            "RandomNoise",
-            "KSamplerSelect",
-            "ViggleTurboSigmas",
-            "SamplerCustomAdvanced",
-            "VAEDecode",
-            "SaveImage",
-            "PreviewAny",
-            "LoadImage",
-            "JoinImageWithAlpha",
-            "QwenImage21Cache",
-        ),
-        models={
-            "diffusion_models": (QWEN_UNET,),
-            "text_encoders": (QWEN_TE,),
-            "vae": (QWEN_VAE,),
-            "loras": (VIGGLE_LORA,),
-        },
-    ),
     "qwen_turbo": Requirement(
         nodes=(
             "UNETLoader",

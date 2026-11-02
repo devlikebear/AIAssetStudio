@@ -9,8 +9,7 @@ MAX_PREVIEWS = 8
 MAX_WAIT_SECONDS = 60
 MAX_LISTED_ASSETS = 100
 FAMILY_LABELS = {
-    "qwen": "image models (Qwen-Image-2.1)",
-    "qwen_turbo": "book image models (Qwen-Image-2.1-Turbo)",
+    "qwen_turbo": "image models (Qwen-Image-2.1-Turbo)",
     "ace": "music models (ACE-Step)",
     "yue2": "vocal models (YuE2)",
     "wan": "video models (Wan 2.2)",

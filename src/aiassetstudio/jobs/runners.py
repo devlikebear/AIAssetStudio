@@ -22,10 +22,8 @@ from ..comfy.graphs import (
     ACE_STEPS,
     QWEN_BOOK_MODELS,
     QWEN_BOOK_STEPS,
-    QWEN_MODELS,
     QWEN_OUTPUT_NODE,
     QWEN_SAMPLER,
-    QWEN_TURBO_STEPS,
     WAN_FPS,
     WAN_FRAMES,
     WAN_HEIGHT,
@@ -41,7 +39,6 @@ from ..comfy.graphs import (
     RefMode,
     ace_music,
     qwen_book_page,
-    qwen_t2i_turbo,
     qwen_text_encode,
     wan_i2v_lightning,
     wan_text_encode,
@@ -242,9 +239,8 @@ async def run_image_job(ctx: RunContext, job: Job) -> None:
         prompt_id = str(uuid.uuid4())
         ctx.prompt_ids.append(prompt_id)  # known before submitting, so a cancel mid-request can still target it
         # The same `ref` as the encode prompt: identical nodes are what lets ComfyUI reuse the cached conditioning.
-        graph = qwen_t2i_turbo(
-            prompt, seed, prefix=f"{project.slug}_{asset_id}", width=IMAGE_SIZE, height=IMAGE_SIZE, ref=ref
-        )
+        refs = [ref] if ref else []
+        graph = qwen_book_page(prompt, seed, f"{project.slug}_{asset_id}", IMAGE_SIZE, IMAGE_SIZE, refs)
         await ctx.comfy.submit(graph, prompt_id=prompt_id)
         entry = await ctx.comfy.wait(prompt_id, timeout=ctx.settings.image_timeout)
         t1 = time.monotonic()
@@ -268,10 +264,10 @@ async def run_image_job(ctx: RunContext, job: Job) -> None:
             "description": params["description"],
             "prompt": prompt,
             "seed": seed,
-            "workflow": "qwen_ref_turbo" if ref else "qwen_t2i_turbo",
-            "models": QWEN_MODELS,
-            "licenses": license_records(QWEN_MODELS),
-            "steps": QWEN_TURBO_STEPS,
+            "workflow": "qwen_ref_official_turbo" if ref else "qwen_official_turbo",
+            "models": QWEN_BOOK_MODELS,
+            "licenses": license_records(QWEN_BOOK_MODELS),
+            "steps": QWEN_BOOK_STEPS,
             "sampler": QWEN_SAMPLER,
             "width": IMAGE_SIZE,
             "height": IMAGE_SIZE,

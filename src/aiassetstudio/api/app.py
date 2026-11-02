@@ -512,7 +512,7 @@ def create_app(
     async def create_image_job(body: ImageJobCreate, s: S) -> JobCreated:
         project = _project_or_404(s, body.project)
         params = body.model_dump(include={"kind", "description", "count", "seed"})
-        job = s.db.create_job(project.id, "image", "qwen", params)
+        job = s.db.create_job(project.id, "image", "qwen_turbo", params)
         s.queue.notify()
         return JobCreated(job_id=job.id)
 

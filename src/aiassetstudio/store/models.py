@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 JobKind = Literal["image", "bgm", "animation", "page_image", "narration", "clip", "book_export"]
-# qwen_turbo: the official Turbo checkpoint of books; tts: the speech pack's sidecar; codex: cloud, no GPU;
+# qwen_turbo: the official Turbo checkpoint; qwen: images before it, in old records; tts: the speech pack's sidecar; codex: cloud, no GPU;
 # none: on this PC, no GPU
 Family = Literal["qwen", "qwen_turbo", "ace", "yue2", "wan", "tts", "codex", "none"]
 JobStatus = Literal["queued", "running", "done", "failed", "cancelled"]

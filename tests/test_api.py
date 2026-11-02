@@ -29,7 +29,7 @@ def test_status(client):
         "vram_free_mb": round(SYSTEM_STATS["devices"][0]["vram_free"] / 2**20),
         "ram_free_mb": round(SYSTEM_STATS["system"]["ram_free"] / 2**20),
     }
-    assert body["preflight"]["qwen"] == {"ok": True, "missing_nodes": [], "missing_models": [], "reason": None}
+    assert body["preflight"]["qwen_turbo"] == {"ok": True, "missing_nodes": [], "missing_models": [], "reason": None}
     assert body["queue"] == {"running": None, "queued": 0, "current": None}
     assert body["gallery_url"] == "http://127.0.0.1:8765/"
     assert body["repo_dir"] == str(REPO_ROOT)
@@ -48,7 +48,7 @@ def test_status_when_comfyui_down(client, fake_comfy):
     body = client.get("/api/status").json()
     assert body["comfy"]["up"] is False
     assert "error" not in body["comfy"]
-    assert body["preflight"]["qwen"]["reason"] == "comfyui_down"
+    assert body["preflight"]["qwen_turbo"]["reason"] == "comfyui_down"
     # ensure=true tries to start ComfyUI; the test settings point comfy_dir at a folder without it
     body = client.get("/api/status", params={"ensure": True}).json()
     assert body["comfy"]["up"] is False

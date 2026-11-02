@@ -61,7 +61,7 @@ async def test_generate_view_pick_export(api, tmp_path):
 
     assert "already finished" in await tools.cancel_job(api, job_id)
     status = await tools.studio_status(api)
-    assert "image models (Qwen-Image-2.1): ready" in status
+    assert "image models (Qwen-Image-2.1-Turbo): ready" in status
     assert "gallery: http://127.0.0.1:8765/" in status
     assert "animation (sprite-gen + codex, cloud): not ready (sprite-gen not found at " in status
 

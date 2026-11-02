@@ -10,6 +10,7 @@ from fakes import FakeComfy
 from PIL import Image
 
 from aiassetstudio.comfy.client import ComfyClient, ComfyExecutionError
+from aiassetstudio.comfy.graphs import QWEN_BOOK_UNET
 from aiassetstudio.config import Settings
 from aiassetstudio.jobs.runners import (
     LOOP_SECTIONS,
@@ -91,8 +92,8 @@ async def test_generates_candidates(env):
         meta = asset.meta
         for key in ("prompt", "seed", "models", "comfy_prompt_id", "alpha_raw", "alpha_processed", "timings"):
             assert key in meta
-        assert meta["steps"] == 6 and meta["sampler"] == "euler"
-        assert meta["models"]["lora"].startswith("Qwen-Image-2.1-viggle-turbo")
+        assert meta["steps"] == 8 and meta["sampler"] == "euler"
+        assert meta["models"]["unet"] == QWEN_BOOK_UNET
         assert meta["comfy_prompt_id"] in e.fake.prompts
         assert meta["alpha_raw"]["border_mean"] > 0
         assert meta["alpha_processed"]["border_mean"] == 0
@@ -226,7 +227,7 @@ async def test_reference_for_sprites(env):
     assert encode["5"]["inputs"]["prompt"].startswith(RGBA_PREFIX + "Replace the subject of picture 1 with a green")
     for asset in e.db.list_assets(job_id=job.id):
         assert asset.meta["reference"] == {"mode": "latent", "file": reference}
-        assert asset.meta["workflow"] == "qwen_ref_turbo"
+        assert asset.meta["workflow"] == "qwen_ref_official_turbo"
     assert "upload_reference" in e.db.get_job(job.id).timings
 
     icon_job = image_job(e, kind="icon", description="a key", count=1, seed=1)
