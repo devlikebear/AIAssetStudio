@@ -39,6 +39,7 @@ npm run tauri dev
 - **자동 업데이트**: `tauri-plugin-updater`. 갤러리가 뜬 뒤 GitHub 릴리즈의 `latest.json`을 확인하고, 사용자가 대화상자에서 동의하면 **셸이 띄운 백엔드를 먼저 종료하고**(설치 파일이 backend/*.dll을 덮어써야 하므로) 설치 후 재시작한다. 피드가 안 닿으면 로그만 남기고 갤러리는 그대로 연다. 서명 키는 개발 PC `%USERPROFILE%\.tauri\aiassetstudio.key`(백업 필수 — 잃으면 설치된 앱들이 영영 업데이트 못 받는다), 공개 키는 `tauri.conf.json`.
 - **릴리즈 CI**: `.github/workflows/release.yml`. `desktop-v*` 태그를 푸시하면 windows 러너가 갤러리 빌드 → 백엔드 포장(selftest 포함) → `tauri-action`으로 설치 파일과 `latest.json`을 릴리즈에 올린다. 저장소 시크릿 `TAURI_SIGNING_PRIVATE_KEY`가 필요하다. 업데이터가 `/releases/latest/download/latest.json`을 보므로, 데스크톱 릴리즈가 저장소의 latest가 아니게 되면(다른 종류의 릴리즈를 올리면) 업데이트가 멈춘다.
 - **설치된 앱의 데이터는 개발 데이터와 다르다**: frozen 기본 data_dir가 `%LOCALAPPDATA%`라서, MCP/CLI가 띄운 개발 백엔드가 이미 돌고 있을 때만 설치된 앱에서도 저장소의 프로젝트가 보인다. ComfyUI 경로도 `AIAS_COMFY_DIR` 환경 변수를 주지 않으면 설치 폴더 기준으로 찾는다.
+- **업데이트 끝단 검증 (2026-11-07) — 성공**: 0.1.0 설치본 → `desktop-v0.1.1`. 태그 푸시(19:53) → 릴리즈 게시(20:02, CI 약 10분, setup.exe/msi와 .sig, latest.json 정상) → 0.1.0 실행 시 대화상자 → '설치' → 설치·재시작이 약 40초(설치 폴더 갱신 20:22:46, 새 셸·백엔드 기동 20:23:25~26). 재시작 후 `desktop.exe`는 0.1.1 빌드(20:00 산출물), `/api/health` 200, `%LOCALAPPDATA%\AIAssetStudio\data\studio.db` 그대로 유지. 깨진 지점 없음.
 
 ## 알려진 한계
 - 백엔드 기동 대기는 90초. 첫 import가 더 느린 PC면 로딩 페이지가 실패 메시지를 보여 주지만 백엔드는 계속 뜨는 중일 수 있다. 재실행하면 된다.
