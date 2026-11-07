@@ -13,7 +13,7 @@ _예상 소요: 약 30시간_
 ## 전제 조건
 
 - [x] 시험 제작 완료([기록](./notes/studio-spike-2026-11-01.md))
-- [x] 시험 스크립트 원본이 `<MyPCWorks>\storybook-lastwater\`에 있다(T1.A.1에서 옮긴다)
+- [x] 시험 스크립트 원본이 작업 폴더에 있다(T1.A.1에서 옮긴다)
 - [x] `aiassetstudio check`에서 `qwen` 계열이 준비됨
 
 ## 포함 기능
