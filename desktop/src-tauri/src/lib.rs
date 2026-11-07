@@ -15,6 +15,66 @@ use tauri_plugin_updater::UpdaterExt;
 /// The backend this shell started, if any. An already-running backend is left alone.
 struct SpawnedBackend(Mutex<Option<Child>>);
 
+/// A Windows Job Object with KILL_ON_JOB_CLOSE: the spawned backend and all its descendants
+/// (the TTS sidecar reparents when the backend dies first) go down with this shell even when the
+/// shell is force-killed and the RunEvent::Exit taskkill never runs — the OS closes the handle.
+#[cfg(windows)]
+mod job {
+    use std::os::windows::io::AsRawHandle;
+
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation, SetInformationJobObject,
+    };
+
+    pub struct Job(*mut core::ffi::c_void);
+    // The handle is a kernel object; using it from any thread is fine.
+    unsafe impl Send for Job {}
+    unsafe impl Sync for Job {}
+
+    impl Job {
+        pub fn new() -> Option<Job> {
+            unsafe {
+                let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if handle.is_null() {
+                    return None;
+                }
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                let set = SetInformationJobObject(
+                    handle,
+                    JobObjectExtendedLimitInformation,
+                    &info as *const _ as *const _,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                );
+                if set == 0 {
+                    CloseHandle(handle);
+                    return None;
+                }
+                Some(Job(handle))
+            }
+        }
+
+        pub fn assign(&self, child: &std::process::Child) {
+            unsafe {
+                AssignProcessToJobObject(self.0, child.as_raw_handle());
+            }
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+struct BackendJob(Option<job::Job>);
+
 fn port() -> u16 {
     std::env::var("AIAS_PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(8765)
 }
@@ -151,7 +211,13 @@ fn start_and_navigate(app: tauri::AppHandle) {
         };
         let log_path = log_dir.join("desktop-backend.log");
         match spawn_backend(command, log_dir) {
-            Ok(child) => *app.state::<SpawnedBackend>().0.lock().expect("not poisoned") = Some(child),
+            Ok(child) => {
+                #[cfg(windows)]
+                if let Some(job) = &app.state::<BackendJob>().0 {
+                    job.assign(&child);
+                }
+                *app.state::<SpawnedBackend>().0.lock().expect("not poisoned") = Some(child);
+            }
             Err(e) => return show_error(&window, &format!("백엔드를 시작하지 못했습니다: {e}")),
         }
         let deadline = Instant::now() + Duration::from_secs(90);
@@ -174,10 +240,13 @@ fn start_and_navigate(app: tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
-        .manage(SpawnedBackend(Mutex::new(None)))
+        .manage(SpawnedBackend(Mutex::new(None)));
+    #[cfg(windows)]
+    let builder = builder.manage(BackendJob(job::Job::new()));
+    let app = builder
         .setup(|app| {
             let handle = app.handle().clone();
             std::thread::spawn(move || start_and_navigate(handle));
