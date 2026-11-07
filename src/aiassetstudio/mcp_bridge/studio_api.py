@@ -121,7 +121,9 @@ class StudioApi:
         # every session after this one closes. If two sessions start it at once, the second backend exits on the
         # port clash; the health check still passes. Its output goes to the log, never to the MCP stdio channel.
         log.info("starting the backend (log: %s)", self.log_path)
-        self.spawn([sys.executable, "-m", "aiassetstudio", *self.serve_args], cwd=REPO_ROOT, log_path=self.log_path)
+        # Frozen (the desktop shell's bundled exe): sys.executable is that exe, which has no -m.
+        command = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, "-m", "aiassetstudio"]
+        self.spawn([*command, *self.serve_args], cwd=REPO_ROOT, log_path=self.log_path)
 
     # --- REST -----------------------------------------------------------------------------------
 

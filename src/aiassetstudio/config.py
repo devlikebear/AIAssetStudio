@@ -2,20 +2,31 @@
 
 import ipaddress
 import os
-from dataclasses import dataclass
+import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
+# Frozen (PyInstaller one-folder, the desktop shell's bundled backend): REPO_ROOT lands on the exe folder,
+# which is right for the gallery (web/dist is copied next to the exe) but wrong for data, since the install
+# folder may not be writable. Data then goes to the user's local app data.
+FROZEN = bool(getattr(sys, "frozen", False))
 REPO_ROOT = Path(__file__).resolve().parents[2]
 # ComfyUI and sprite-gen are looked for in folders next to this repository unless AIAS_COMFY_DIR / AIAS_SPRITE_GEN
 # say otherwise.
 SIBLING_DIR = REPO_ROOT.parent
 
 
+def _default_data_dir() -> Path:
+    if FROZEN:
+        return Path(os.environ.get("LOCALAPPDATA", Path.home())) / "AIAssetStudio" / "data"
+    return REPO_ROOT / "data"
+
+
 @dataclass(frozen=True)
 class Settings:
     host: str = "127.0.0.1"
     port: int = 8765
-    data_dir: Path = REPO_ROOT / "data"
+    data_dir: Path = field(default_factory=_default_data_dir)
     comfy_url: str = "http://127.0.0.1:8188"
     comfy_dir: Path = SIBLING_DIR / "ComfyUI"  # used by the Phase 2 auto-launcher
     comfy_python: str = ""  # ComfyUI's Python for the auto-launcher; empty = <comfy_dir>\.venv\Scripts\python.exe

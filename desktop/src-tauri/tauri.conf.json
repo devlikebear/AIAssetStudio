@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "AIAssetStudio",
+  "productName": "AI Asset Studio",
   "version": "0.1.0",
   "identifier": "com.aiassetstudio.desktop",
   "build": {
@@ -22,9 +22,19 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ1OEREMTlEMkQ5RkYzMDcKUldRSDg1OHRuZEdOUmRpS0ZRQXpORnY3cmdqcVYzbVdzWVk1UEpWMjYwZlRkTlh0VjlqZjJtc3QK",
+      "endpoints": [
+        "https://github.com/devlikebear/AIAssetStudio/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
+    "resources": ["backend"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
