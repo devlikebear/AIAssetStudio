@@ -6,6 +6,7 @@ __pycache__/
 .ruff_cache/
 web/node_modules/
 web/dist/
+desktop/node_modules/
 *.log
 # Claude Code settings for one PC (its launch.json holds that PC's paths)
 .claude/launch.json
