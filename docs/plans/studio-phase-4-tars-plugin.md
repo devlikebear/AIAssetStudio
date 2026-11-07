@@ -10,7 +10,7 @@ _예상 소요: 약 16시간_
 
 tars 저장소를 고치지 않고, 플러그인과 포커스 템플릿 파일만으로 tars에서 그림책 공정을 돌린다. tars는 linetta MCP로 원작을 읽고 Studio MCP로 생성을 요청한다. 다른 OS의 tars는 네트워크 MCP로 GPU PC의 Studio를 쓴다.
 
-또 Studio가 없는 Windows GPU PC에서 tars가 대화로 설치를 안내한다. 설치는 Studio CLI가 하고 스킬은 호출과 설명만 한다. 데스크톱 앱은 만들지 않는다.
+또 Studio가 없는 Windows GPU PC에서 tars가 대화로 설치를 안내한다. 설치는 Studio CLI가 하고 스킬은 호출과 설명만 한다. 데스크톱 앱은 이 페이즈의 범위가 아니다(2026-11-07부터 별도 셸이 있다: [`studio-desktop-shell.md`](./studio-desktop-shell.md)).
 
 ## tars 쪽 전제 (2026-11-01, v0.67.0)
 
