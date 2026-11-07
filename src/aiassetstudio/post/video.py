@@ -12,7 +12,7 @@ from typing import Literal
 
 from .audio import MP3_LOUDNESS, run_ffmpeg
 
-FPS = 16
+FPS = 24  # LTX-2.5's own rate; Wan's 16 fps clips are brought up to it
 WIDTH, HEIGHT = 1280, 960
 ZOOM = 0.07  # how much a page's picture or last frame grows over its time on screen
 ZOOM_SIDE = (2560, 1920)  # zoompan rounds to whole pixels; working at twice the size keeps the motion smooth
@@ -31,12 +31,13 @@ class Shot:
 
     picture: Path
     clip: Path | None
-    clip_frames: int  # frames in the clip
+    clip_frames: int  # frames in the clip, at clip_fps
     method: Method
     head_s: float  # seconds of the clip that "head" uses
     text: str
     start_s: float
     length_s: float
+    clip_fps: float = FPS
 
 
 def frame_edges(times: list[float], fps: int = FPS) -> list[int]:
@@ -48,7 +49,7 @@ def clip_frames_used(shot: Shot, frames: int) -> int:
     """Frames of the clip on screen before its last one holds; 0 for the picture alone."""
     if shot.clip is None or shot.method == "still":
         return 0
-    available = shot.clip_frames
+    available = round(shot.clip_frames / shot.clip_fps * FPS)
     if shot.method == "head":
         available = min(available, max(1, round(shot.head_s * FPS)))
     return min(available, frames)
@@ -66,7 +67,7 @@ def shot_filter(shot: Shot, frames: int) -> tuple[Path, str]:
     if not played:
         crop = f"crop=min(iw\\,ih*{WIDTH}/{HEIGHT}):min(ih\\,iw*{HEIGHT}/{WIDTH})"
         return shot.picture, f"{crop},{_zoompan(f'1+{ZOOM}*on/{frames}', frames)},format=yuv420p"
-    trim = f"trim=end_frame={played},setpts=PTS-STARTPTS"
+    trim = f"fps={FPS},trim=end_frame={played},setpts=PTS-STARTPTS"
     held = frames - played
     if not held:
         return shot.clip, f"{trim},scale={WIDTH}:{HEIGHT}:flags=lanczos,format=yuv420p"

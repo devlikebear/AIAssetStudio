@@ -189,7 +189,9 @@ class FakeComfy:
             )
         pid = body.get("prompt_id") or str(uuid.uuid4())
         self.prompts[pid] = body["prompt"]
-        sampling = any(node["class_type"] == "KSamplerAdvanced" for node in body["prompt"].values())
+        sampling = any(
+            node["class_type"] in ("KSamplerAdvanced", "SamplerCustomAdvanced") for node in body["prompt"].values()
+        )
         if self.fail_once and sampling:
             self.error_message, self.fail_once = self.fail_once, None
             self.history[pid] = self._entry(pid, "error")

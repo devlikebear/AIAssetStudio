@@ -212,6 +212,17 @@ class GeneratePages(BaseModel):
     seed: int | None = Field(None, ge=0, le=2**53)  # default: a new one per page
 
 
+class GenerateClips(GeneratePages):
+    model: Literal["wan", "ltx"] = "ltx"  # LTX-2.5 since 2026-11-07: sharper, faster, no strangers walking in
+    seconds: float = Field(5, ge=3, le=10)  # Wan makes 5 s only
+
+    @model_validator(mode="after")
+    def check_seconds(self) -> "GenerateClips":
+        if self.model == "wan" and self.seconds != 5:
+            raise ValueError("Wan clips are 5 s long")
+        return self
+
+
 class GenerateSheet(BaseModel):
     seed: int | None = Field(None, ge=0, le=2**53)
 

@@ -13,6 +13,7 @@ FAMILY_LABELS = {
     "ace": "music models (ACE-Step)",
     "yue2": "vocal models (YuE2)",
     "wan": "video models (Wan 2.2)",
+    "ltx": "video models (LTX-2.5)",
 }
 
 
@@ -495,10 +496,18 @@ async def generate_narration(
     )
 
 
-async def generate_clips(api: StudioApi, book_id: str, pages: list[int] | None = None, seed: int | None = None) -> str:
-    job_ids = await api.generate_clips(book_id, pages, seed)
+async def generate_clips(
+    api: StudioApi,
+    book_id: str,
+    pages: list[int] | None = None,
+    seed: int | None = None,
+    model: str = "ltx",
+    seconds: float = 5,
+) -> str:
+    job_ids = await api.generate_clips(book_id, pages, seed, model, seconds)
+    pace = "About 1.5 minutes each at 5 s" if model == "ltx" else "About 3 minutes each"
     return (
-        f"Queued {len(job_ids)} clips: {', '.join(job_ids)}. About 3 minutes each, and other GPU jobs wait meanwhile. "
+        f"Queued {len(job_ids)} clips: {', '.join(job_ids)}. {pace}, and other GPU jobs wait meanwhile. "
         f"Follow them with get_job(job_id, wait_seconds=60), which shows each clip's last frame, or get_book(book_id="
         f"'{book_id}'). You cannot play video: ask the user to review in the gallery: {api.base_url}/#/books/{book_id}"
     )

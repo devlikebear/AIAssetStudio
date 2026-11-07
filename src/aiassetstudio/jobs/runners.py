@@ -20,6 +20,13 @@ from ..comfy.graphs import (
     ACE_OUTPUT_NODE,
     ACE_SAMPLER,
     ACE_STEPS,
+    LTX_FPS,
+    LTX_HEIGHT,
+    LTX_MODELS,
+    LTX_OUTPUT_NODE,
+    LTX_PROMPT_PREFIX,
+    LTX_STEPS,
+    LTX_WIDTH,
     QWEN_BOOK_MODELS,
     QWEN_BOOK_STEPS,
     QWEN_OUTPUT_NODE,
@@ -38,6 +45,9 @@ from ..comfy.graphs import (
     Reference,
     RefMode,
     ace_music,
+    ltx_frames,
+    ltx_i2v,
+    ltx_text_encode,
     qwen_book_page,
     qwen_text_encode,
     wan_i2v_lightning,
@@ -675,6 +685,52 @@ async def run_narration_job(ctx: RunContext, job: Job) -> None:
     ctx.db.update_page(page.id, narration_status="candidate", narration_asset_id=current.narration_asset_id or asset_id)
 
 
+@dataclass(frozen=True)
+class ClipModel:
+    """A video model a clip job can use: its two graphs and what its clips are like."""
+
+    workflow: str
+    text_encode: Callable[[str], dict]
+    graph: Callable[[str, str, int, str, float], dict]
+    output_node: str
+    models: dict
+    steps: int
+    width: int
+    height: int
+    fps: int
+    frames: Callable[[float], int]
+    prompt_prefix: str = ""
+
+
+CLIP_MODELS = {
+    "wan": ClipModel(
+        "wan_i2v_lightning",
+        wan_text_encode,
+        lambda prompt, image, seed, prefix, seconds: wan_i2v_lightning(prompt, image, seed, prefix),
+        WAN_OUTPUT_NODE,
+        WAN_MODELS,
+        WAN_STEPS,
+        WAN_WIDTH,
+        WAN_HEIGHT,
+        WAN_FPS,
+        lambda seconds: WAN_FRAMES,
+    ),
+    "ltx": ClipModel(
+        "ltx_i2v_distilled",
+        ltx_text_encode,
+        ltx_i2v,
+        LTX_OUTPUT_NODE,
+        LTX_MODELS,
+        LTX_STEPS,
+        LTX_WIDTH,
+        LTX_HEIGHT,
+        LTX_FPS,
+        ltx_frames,
+        LTX_PROMPT_PREFIX,
+    ),
+}
+
+
 def _save_clip(data: bytes, directory: Path, ffmpeg: str) -> None:
     """clip.mp4 as ComfyUI saved it, its first and last frames, and the last one as the preview: a clip goes wrong late,
     and with the hold method the last frame stays on screen longest."""
@@ -696,7 +752,10 @@ async def run_clip_job(ctx: RunContext, job: Job) -> None:
     seed = int(params["seed"])
     project = ctx.db.get_project(job.project)
     page = ctx.db.get_page(params["page_id"])
+    model = CLIP_MODELS[params.get("model", "wan")]
+    seconds = float(params.get("seconds", 5))
     prompt = clip_prompt(project.style, page.motion_prompt, page.motion_still)
+    prompt = f"{model.prompt_prefix} {prompt}" if model.prompt_prefix else prompt
     warnings = []
     ram_free = (await ctx.comfy.system_stats()).get("system", {}).get("ram_free", 0) / 2**30
     if ram_free < LOW_RAM_GB:
@@ -709,7 +768,7 @@ async def run_clip_job(ctx: RunContext, job: Job) -> None:
     t0 = time.monotonic()
     encode_id = str(uuid.uuid4())
     ctx.prompt_ids.append(encode_id)
-    await ctx.comfy.submit(wan_text_encode(prompt), prompt_id=encode_id)
+    await ctx.comfy.submit(model.text_encode(prompt), prompt_id=encode_id)
     await ctx.comfy.free(unload_models=True, free_memory=False)  # applied right after the encode prompt
     await ctx.comfy.wait(encode_id, timeout=ctx.settings.clip_timeout)
     encode_s = time.monotonic() - t0
@@ -718,7 +777,7 @@ async def run_clip_job(ctx: RunContext, job: Job) -> None:
     ctx.db.update_job(job.id, stage="generating")
     asset_id = new_id()
     t0 = time.monotonic()
-    graph = wan_i2v_lightning(prompt, image, seed, f"{project.slug}_{asset_id}")
+    graph = model.graph(prompt, image, seed, f"{project.slug}_{asset_id}", seconds)
     prompt_id = str(uuid.uuid4())
     ctx.prompt_ids.append(prompt_id)
     await ctx.comfy.submit(graph, prompt_id=prompt_id)
@@ -735,7 +794,7 @@ async def run_clip_job(ctx: RunContext, job: Job) -> None:
         await ctx.comfy.submit(graph, prompt_id=prompt_id)
         entry = await ctx.comfy.wait(prompt_id, timeout=ctx.settings.clip_timeout, poll=2.0)
     t1 = time.monotonic()
-    videos = output_files(entry, WAN_OUTPUT_NODE)
+    videos = output_files(entry, model.output_node)
     if not videos:
         raise ComfyError(f"ComfyUI returned no video for prompt {prompt_id}")
     output = videos[0]
@@ -752,14 +811,15 @@ async def run_clip_job(ctx: RunContext, job: Job) -> None:
         "prompt": prompt,
         "picture": page.image_asset_id,
         "seed": seed,
-        "workflow": "wan_i2v_lightning",
-        "models": WAN_MODELS,
-        "licenses": license_records(WAN_MODELS),
-        "steps": WAN_STEPS,
-        "width": WAN_WIDTH,
-        "height": WAN_HEIGHT,
-        "frames": WAN_FRAMES,
-        "fps": WAN_FPS,
+        "workflow": model.workflow,
+        "model": params.get("model", "wan"),
+        "models": model.models,
+        "licenses": license_records(model.models),
+        "steps": model.steps,
+        "width": model.width,
+        "height": model.height,
+        "frames": model.frames(seconds),
+        "fps": model.fps,
         "ram_free_gb": round(ram_free, 2),
         "warnings": warnings,
         "comfy_prompt_id": prompt_id,
@@ -840,6 +900,7 @@ def _shot(ctx: RunContext, page: Page, start_s: float, length_s: float) -> Shot:
         picture=_page_picture(ctx, page),
         clip=path,
         clip_frames=clip.meta["frames"] if clip is not None else 0,
+        clip_fps=clip.meta.get("fps", WAN_FPS) if clip is not None else WAN_FPS,
         method=page.clip_method if clip is not None else "still",
         head_s=page.clip_head_s,
         text=page.text,

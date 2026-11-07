@@ -9,6 +9,11 @@ from .comfy.graphs import (
     ACE_TE_SMALL,
     ACE_UNET,
     ACE_VAE,
+    LTX_AUDIO_VAE,
+    LTX_TE,
+    LTX_UNET,
+    LTX_UPSCALER,
+    LTX_VIDEO_VAE,
     QWEN_BOOK_UNET,
     QWEN_TE,
     QWEN_UNET,
@@ -55,6 +60,9 @@ MODEL_LICENSES: dict[str, ModelLicense] = {
 }
 _WAN = ModelLicense("Wan 2.2", "Apache License 2.0", "open")
 MODEL_LICENSES |= {f: _WAN for f in (WAN_UNET_HIGH, WAN_UNET_LOW, WAN_LORA_HIGH, WAN_LORA_LOW, WAN_TE, WAN_VAE)}
+# No region is excluded; free below USD 10 million of yearly revenue (docs/plans/notes/studio-ltx-2.5.md).
+_LTX = ModelLicense("LTX-2.5", "LTX-2.x Community License", "community")
+MODEL_LICENSES |= {f: _LTX for f in (LTX_UNET, LTX_TE, LTX_VIDEO_VAE, LTX_AUDIO_VAE, LTX_UPSCALER)}
 _UNLISTED = ModelLicense("unlisted model", "not recorded", "unknown")
 
 

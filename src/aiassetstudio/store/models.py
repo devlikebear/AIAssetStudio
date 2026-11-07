@@ -7,7 +7,7 @@ from pydantic import BaseModel
 JobKind = Literal["image", "bgm", "animation", "page_image", "narration", "clip", "book_export"]
 # qwen_turbo: the official Turbo checkpoint; qwen: images before it, in old records; tts: the speech pack's sidecar; codex: cloud, no GPU;
 # none: on this PC, no GPU
-Family = Literal["qwen", "qwen_turbo", "ace", "yue2", "wan", "tts", "codex", "none"]
+Family = Literal["qwen", "qwen_turbo", "ace", "yue2", "wan", "ltx", "tts", "codex", "none"]
 JobStatus = Literal["queued", "running", "done", "failed", "cancelled"]
 AssetKind = Literal["sprite", "icon", "bgm", "animation", "page_image", "narration", "clip", "book_export"]
 AssetStatus = Literal["candidate", "selected", "rejected"]

@@ -49,6 +49,30 @@ WAN_SWITCH_STEP = 2  # the high-noise model takes the first steps, the low-noise
 WAN_SHIFT = 5.0
 WAN_WIDTH, WAN_HEIGHT, WAN_FRAMES, WAN_FPS = 832, 624, 81, 16
 
+# LTX-2.5, distilled 22B, after ComfyUI's template video_ltx2_5_i2v.json: 8 steps at half size, a x2 latent upscale,
+# 3 more steps; no prompt enhancer (docs/plans/notes/studio-ltx-2.5.md, 2026-11-03: 1024x768, 5 s at 24 fps in about
+# 85 s, and no strangers walking into empty space as with Wan). It makes sound too; an empty audio latent goes in and
+# the sound is dropped. The repository is gated: a person agrees to its license on Hugging Face.
+LTX_UNET = "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors"  # diffusion_models
+LTX_TE = "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors"  # text_encoders
+LTX_VIDEO_VAE = "ltx-2.5-video-vae-bf16.safetensors"  # vae
+LTX_AUDIO_VAE = "ltx-2.5-audio-vae-bf16.safetensors"  # vae
+LTX_UPSCALER = "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"  # latent_upscale_models
+LTX_MODELS = {
+    "unet": LTX_UNET,
+    "text_encoder": LTX_TE,
+    "vae": (LTX_VIDEO_VAE, LTX_AUDIO_VAE),
+    "upscaler": LTX_UPSCALER,
+}
+LTX_OUTPUT_NODE = "30"
+LTX_STEPS = 8 + 3
+LTX_WIDTH, LTX_HEIGHT, LTX_FPS = 1024, 768, 24
+LTX_SIGMAS_LOW = "1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0"
+LTX_SIGMAS_HIGH = "0.85, 0.7250, 0.4219, 0.0"
+LTX_NEGATIVE = "pc game, console game, video game, cartoon, childish, ugly"
+# The template's own opening for an image to video prompt.
+LTX_PROMPT_PREFIX = "Use the provided start image as the first frame."
+
 RefMode = Literal["latent", "vision"]
 
 
@@ -451,4 +475,90 @@ def wan_i2v_lightning(
         "15": node("VAEDecode", samples=["14", 0], vae=["10", 0]),
         "16": node("CreateVideo", images=["15", 0], fps=float(WAN_FPS)),
         WAN_OUTPUT_NODE: node("SaveVideo", video=["16", 0], filename_prefix=prefix, format="mp4"),
+    }
+
+
+def ltx_frames(seconds: float) -> int:
+    return round(seconds * LTX_FPS) + 1
+
+
+def _ltx_text_nodes(prompt: str) -> dict:
+    """The nodes ltx_text_encode() and ltx_i2v() share, built identically so ComfyUI reuses the conditioning."""
+
+    def encode(text: str) -> dict:
+        return {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": text}}
+
+    loader = {"clip_name": LTX_TE, "type": "ltxv", "device": "default"}
+    return {"2": {"class_type": "CLIPLoader", "inputs": loader}, "3": encode(prompt), "4": encode(LTX_NEGATIVE)}
+
+
+def ltx_text_encode(prompt: str) -> dict:
+    """Only the text encoding, so its 14 GB encoder can leave memory before the 20 GB video model loads."""
+    previews = {
+        node: {"class_type": "PreviewAny", "inputs": {"source": [source, 0]}}
+        for node, source in (("40", "3"), ("41", "4"))
+    }
+    return _ltx_text_nodes(prompt) | previews
+
+
+def ltx_i2v(prompt: str, image: str, seed: int, prefix: str, seconds: float = 5) -> dict:
+    """A clip that starts from `image` (a LoadImage value), LTX_WIDTH x LTX_HEIGHT."""
+
+    def node(class_type: str, **inputs) -> dict:
+        return {"class_type": class_type, "inputs": inputs}
+
+    frames = ltx_frames(seconds)
+    vae, picture = ["6", 0], ["9", 0]
+    return _ltx_text_nodes(prompt) | {
+        "1": node("UNETLoader", unet_name=LTX_UNET, weight_dtype="default"),
+        "5": node("LTXVConditioning", positive=["3", 0], negative=["4", 0], frame_rate=float(LTX_FPS)),
+        "6": node("VAELoader", vae_name=LTX_VIDEO_VAE),
+        "7": node("VAELoader", vae_name=LTX_AUDIO_VAE),
+        "8": node("LoadImage", image=image),
+        "9": node("LTXVPreprocess", image=["8", 0], img_compression=18),
+        "10": node("EmptyLTXVLatentVideo", width=LTX_WIDTH // 2, height=LTX_HEIGHT // 2, length=frames, batch_size=1),
+        "11": node("LTXVImgToVideoInplace", vae=vae, image=picture, latent=["10", 0], strength=0.7, bypass=False),
+        "12": node("LTXVEmptyLatentAudio", frames_number=frames, frame_rate=LTX_FPS, batch_size=1, audio_vae=["7", 0]),
+        "13": node("LTXVConcatAVLatent", video_latent=["11", 0], audio_latent=["12", 0]),
+        "14": node(
+            "LTXVDualCFGGuider", model=["1", 0], positive=["5", 0], negative=["5", 1], video_cfg=1.0, audio_cfg=1.0
+        ),
+        "15": node("RandomNoise", noise_seed=seed),
+        "16": node("KSamplerSelect", sampler_name="euler_ancestral"),
+        "17": node("ManualSigmas", sigmas=LTX_SIGMAS_LOW),
+        "18": node(
+            "SamplerCustomAdvanced",
+            noise=["15", 0],
+            guider=["14", 0],
+            sampler=["16", 0],
+            sigmas=["17", 0],
+            latent_image=["13", 0],
+        ),
+        "19": node("LTXVSeparateAVLatent", av_latent=["18", 0]),
+        "20": node("LatentUpscaleModelLoader", model_name=LTX_UPSCALER),
+        "21": node("LTXVLatentUpsampler", samples=["19", 0], upscale_model=["20", 0], vae=vae),
+        "22": node("LTXVImgToVideoInplace", vae=vae, image=picture, latent=["21", 0], strength=1.0, bypass=False),
+        "23": node("LTXVConcatAVLatent", video_latent=["22", 0], audio_latent=["19", 1]),
+        "24": node("RandomNoise", noise_seed=seed + 1),
+        "25": node("ManualSigmas", sigmas=LTX_SIGMAS_HIGH),
+        "26": node(
+            "SamplerCustomAdvanced",
+            noise=["24", 0],
+            guider=["14", 0],
+            sampler=["16", 0],
+            sigmas=["25", 0],
+            latent_image=["23", 0],
+        ),
+        "27": node("LTXVSeparateAVLatent", av_latent=["26", 0]),
+        "28": node(
+            "VAEDecodeTiled",
+            samples=["27", 0],
+            vae=vae,
+            tile_size=512,
+            overlap=64,
+            temporal_size=64,
+            temporal_overlap=16,
+        ),
+        "29": node("CreateVideo", images=["28", 0], fps=float(LTX_FPS)),
+        LTX_OUTPUT_NODE: node("SaveVideo", video=["29", 0], filename_prefix=prefix, format="mp4"),
     }

@@ -51,10 +51,10 @@ For a moving picture book of that book: set_page_motion on each page with its pi
 look at each clip's last frame, then ask the user to play them in the gallery and pick how each page is shown -> their
 approval, picture and narration -> export_book(format="mp4"). Writing motion_prompt, in English: one small movement
 (water, wind, a hand), never a story. A negative prompt does nothing here, so keep motion_still on unless someone must
-really move. Clips lose small traits and let people drift late in their 5 s: if a small trait matters to the story on
-that page, set clip_method "still", which shows the approved picture slowly zooming. Where a picture has empty space
-beside one or two people, clips walk strangers into it from about 1.5 s, and saying not to does not help: use "still"
-there rather than retrying. A clip plays once and its last frame holds for the rest of the page, so that frame must be
+really move. Clips can lose small traits and let people drift late: if a small trait matters to the story on that
+page, set clip_method "still", which shows the approved picture slowly zooming. With model "wan", a picture with empty
+space beside one or two people gets strangers walking into it from about 1.5 s, and saying not to does not help; LTX
+(the default) did not do this. A clip plays once and its last frame holds for the rest of the page, so that frame must be
 good; if only the start is good, use "head"."""
 
 mcp = MCPServer("aiassetstudio", instructions=INSTRUCTIONS)
@@ -468,10 +468,14 @@ async def generate_clips(
         Field(description="Page numbers; omit for every page in draft or redo with an approved picture and a motion"),
     ] = None,
     seed: Annotated[int | None, Field(ge=0, description="Random per page if omitted")] = None,
+    model: Annotated[
+        Literal["ltx", "wan"], Field(description="ltx: LTX-2.5, 1024x768 at 24 fps; wan: Wan 2.2, 832x624, 5 s only")
+    ] = "ltx",
+    seconds: Annotated[float, Field(ge=3, le=10, description="Clip length; longer leaves less of the page held")] = 5,
 ) -> str:
-    """Queue a 5 s clip from each page's approved picture, about 3 minutes each. A new clip joins the page's clips; the
-    choice already made stays. You cannot play video: look at the last frames, and ask the user to review."""
-    return await _call(tools.generate_clips, book_id, pages, seed)
+    """Queue a clip from each page's approved picture: with LTX about 1.5 minutes for 5 s. A new clip joins the page's
+    clips; the choice already made stays. You cannot play video: look at the last frames, and ask the user to review."""
+    return await _call(tools.generate_clips, book_id, pages, seed, model, seconds)
 
 
 @mcp.tool(structured_output=False)

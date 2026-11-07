@@ -61,6 +61,7 @@ from .schemas import (
     CheckSources,
     ExportRequest,
     ExportResult,
+    GenerateClips,
     GeneratePages,
     GenerateSheet,
     ImageJobCreate,
@@ -705,7 +706,7 @@ def create_app(
         return JobsCreated(job_ids=job_ids)
 
     @app.post("/api/books/{book_id}/clips", status_code=202)
-    async def generate_clips(book_id: str, body: GeneratePages, s: S) -> JobsCreated:
+    async def generate_clips(book_id: str, body: GenerateClips, s: S) -> JobsCreated:
         """One job per page: a clip that starts from the page's approved picture. A new clip joins the page's clips."""
         book = _book_or_404(s, book_id)
         s.db.release_idle_media(book_id)
@@ -743,8 +744,10 @@ def create_app(
                 "description": f"{book.title}, page {page.number}",
                 "count": 1,
                 "seed": body.seed,
+                "model": body.model,
+                "seconds": body.seconds,
             }
-            job_ids.append(s.db.create_job(book.project_id, "clip", "wan", params).id)
+            job_ids.append(s.db.create_job(book.project_id, "clip", body.model, params).id)
             s.db.update_page(page.id, clip_status="queued")
         s.queue.notify()
         return JobsCreated(job_ids=job_ids)

@@ -39,7 +39,7 @@ def test_frames_add_up_however_the_pages_round():
 
 @pytest.mark.parametrize(
     ("method", "frames", "used"),
-    [("full", 160, 81), ("full", 40, 40), ("head", 160, 32), ("head", 20, 20), ("still", 160, 0)],
+    [("full", 160, 81), ("full", 40, 40), ("head", 160, 48), ("head", 20, 20), ("still", 160, 0)],
 )
 def test_how_much_of_the_clip_shows(method, frames, used):
     assert clip_frames_used(shot(method), frames) == used
@@ -143,7 +143,7 @@ def test_a_book_of_three_ways_runs_as_long_as_its_narration(tmp_path):
     out = tmp_path / "book.mp4"
     info = assemble(shots, tmp_path / "audio.wav", out, tmp_path / "work", "ffmpeg", [])
 
-    assert info["page_frames"] == [0, 48, 82]
+    assert info["page_frames"] == [0, 72, 122]
     assert info["length_s"] == pytest.approx(8.0 + 1.2, abs=1 / FPS)
     streams = {s["codec_type"]: s for s in probe(out)["streams"]}
     assert (streams["video"]["width"], streams["video"]["height"]) == (1280, 960)
@@ -171,10 +171,10 @@ def test_the_held_frame_zooms_slowly_after_the_clip(tmp_path):
         [],
     )
     segment = work / "seg000.mp4"
-    assert int(next(s for s in probe(segment)["streams"])["nb_read_frames"]) == 3 * FPS + 19
+    assert int(next(s for s in probe(segment)["streams"])["nb_read_frames"]) == round(4.2 * FPS)
     first_held = frame(segment, 16, tmp_path / "a.png")
     next_held = frame(segment, 17, tmp_path / "b.png")
-    last = frame(segment, 3 * FPS + 18, tmp_path / "c.png")
+    last = frame(segment, round(4.2 * FPS) - 1, tmp_path / "c.png")
     assert np.abs(first_held - next_held).mean() < 3  # no jump where the clip stops
     assert np.abs(first_held - last).mean() > np.abs(first_held - next_held).mean() * 3
 
@@ -196,3 +196,11 @@ def test_named_models_get_a_last_screen(tmp_path):
     )
     assert info["length_s"] == 5.0
     assert "그림: 모델" in (work / "subs.ass").read_text(encoding="utf-8-sig")
+
+
+def test_a_slower_clip_is_counted_in_its_own_time():
+    """A Wan clip has 81 frames at 16 fps: 5 s, so 121 frames of the 24 fps book."""
+    wan = Shot(Path("p.png"), Path("c.mp4"), 81, "full", 2.0, "말.", 0.0, 10.0, clip_fps=16)
+    assert clip_frames_used(wan, 400) == round(81 / 16 * FPS)
+    _, graph = shot_filter(wan, 400)
+    assert graph.startswith(f"fps={FPS},trim=end_frame={round(81 / 16 * FPS)}")

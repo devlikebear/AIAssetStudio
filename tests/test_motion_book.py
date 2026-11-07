@@ -7,7 +7,7 @@ from conftest import make_project
 from fakes import FakeComfy
 from test_audiobook import client, installed, narrate, sidecar  # noqa: F401
 
-from aiassetstudio.comfy.graphs import WAN_LORA_HIGH, WAN_OUTPUT_NODE
+from aiassetstudio.comfy.graphs import LTX_UNET, WAN_LORA_HIGH, WAN_OUTPUT_NODE
 from aiassetstudio.mcp_bridge import tools
 
 
@@ -34,7 +34,7 @@ def animate(client, book_id: str, **body) -> list[dict]:  # noqa: F811
 
 def test_a_clip_starts_from_the_page_picture(client, fake_comfy: FakeComfy):  # noqa: F811
     book = picture_book(client, "글")
-    [job] = animate(client, book["id"], seed=9)
+    [job] = animate(client, book["id"], seed=9, model="wan")
     assert job["status"] == "done", job
     graph = fake_comfy.graphs[-1]
     assert graph["3"]["inputs"]["lora_name"] == WAN_LORA_HIGH
@@ -64,8 +64,32 @@ def test_a_clip_starts_from_the_page_picture(client, fake_comfy: FakeComfy):  # 
 def test_someone_who_must_move_leaves_the_stay_in_place_words_out(client, fake_comfy):  # noqa: F811
     book = picture_book(client, "글")
     client.patch(f"/api/pages/{book['pages'][0]['id']}", json={"motion_still": False}).raise_for_status()
-    animate(client, book["id"])
+    animate(client, book["id"], model="wan")
     assert "stays in exactly" not in fake_comfy.graphs[-1]["8"]["inputs"]["text"]
+
+
+def test_ltx_is_the_default_and_its_length_can_be_chosen(client, fake_comfy):  # noqa: F811
+    book = picture_book(client, "글")
+    [job] = animate(client, book["id"], seed=5, seconds=10)
+    assert job["status"] == "done", job
+    assert job["family"] == "ltx"
+    graph = fake_comfy.graphs[-1]
+    assert graph["1"]["inputs"]["unet_name"] == LTX_UNET
+    assert graph["10"]["inputs"]["length"] == 241
+    assert graph["15"]["inputs"]["noise_seed"] == 5
+    assert graph["3"]["inputs"]["text"].startswith(
+        "Use the provided start image as the first frame. The water ripples."
+    )
+    assert fake_comfy.graphs[-2]["3"] == graph["3"]  # encoded first, as with Wan
+    meta = job["assets"][0]["meta"]
+    assert (meta["model"], meta["fps"], meta["frames"], meta["width"]) == ("ltx", 24, 241, 1024)
+    assert meta["licenses"][0]["class"] == "community"
+
+
+def test_wan_clips_are_five_seconds(client):  # noqa: F811
+    book = picture_book(client, "글")
+    r = client.post(f"/api/books/{book['id']}/clips", json={"model": "wan", "seconds": 8})
+    assert r.status_code == 422
 
 
 def test_a_clip_file_can_be_played_from_any_point(client):  # noqa: F811
