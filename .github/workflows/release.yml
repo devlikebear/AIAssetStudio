@@ -1,0 +1,60 @@
+# Desktop shell release: push a `desktop-v*` tag to build the frozen backend + Tauri installer and
+# publish a GitHub release with the updater's latest.json. The updater reads
+# /releases/latest/download/latest.json, so desktop releases must stay the repository's `latest`
+# (published, not draft/prerelease) or installed apps stop seeing updates.
+#
+# Needs the TAURI_SIGNING_PRIVATE_KEY repository secret (the key pair lives on the dev PC at
+# %USERPROFILE%\.tauri\aiassetstudio.key; losing it means installed apps can never update again).
+name: desktop-release
+
+on:
+  push:
+    tags:
+      - "desktop-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build the gallery
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Freeze the backend (includes its selftest)
+        run: uv run --no-project python scripts/freeze_backend.py
+
+      - name: Install shell dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build and release the shell
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        with:
+          projectPath: desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "AI Asset Studio ${{ github.ref_name }}"
+          releaseBody: "데스크톱 셸 릴리즈. 설치 파일(.exe)을 받아 실행하세요; 설치된 앱은 이후 릴리즈를 스스로 찾아 업데이트합니다."
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
