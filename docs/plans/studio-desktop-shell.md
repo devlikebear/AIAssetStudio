@@ -34,3 +34,4 @@ npm run tauri dev
 - **개발 체크아웃 전용**: 저장소 경로를 컴파일 시점(`CARGO_MANIFEST_DIR`)에 박는다. 배포하려면 로드맵 Next의 포장 작업이 먼저다 — PyInstaller로 `aiassetstudio serve`를 얼리는 시험(`librosa`→`numba`/`llvmlite`, `scipy`, `soundfile` DLL이 험로), 그다음 Tauri sidecar로 묶기.
 - 백엔드 기동 대기는 90초. 첫 import가 더 느린 PC면 로딩 페이지가 실패 메시지를 보여 주지만 백엔드는 계속 뜨는 중일 수 있다. 재실행하면 된다.
 - 아이콘은 create-tauri-app 기본값이다.
+- **종료는 우아하지 않다**: 이 셸은 이 코드베이스에서 처음으로 백엔드를 죽이는 주체다(MCP·CLI의 detach 경로는 절대 죽이지 않는다). Windows에서 `taskkill /T`로 트리를 함께 끝내 TTS 사이드카 고아는 막지만, FastAPI lifespan 정리는 건너뛴다. 작업이 도는 중에 창을 닫으면 그 작업은 중단되고 DB 상태 갱신도 생략된다. ComfyUI는 원래 detached라 영향 없다.

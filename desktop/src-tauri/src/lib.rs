@@ -118,6 +118,16 @@ pub fn run() {
     app.run(|app, event| {
         if let RunEvent::Exit = event {
             if let Some(mut child) = app.state::<SpawnedBackend>().0.lock().expect("not poisoned").take() {
+                // The backend's lifespan teardown stops its TTS sidecar child process, but a hard kill
+                // skips that teardown, so kill the whole process tree or the sidecar is orphaned.
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    let _ = Command::new("taskkill")
+                        .args(["/PID", &child.id().to_string(), "/T", "/F"])
+                        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+                        .output();
+                }
                 let _ = child.kill();
                 let _ = child.wait();
             }
