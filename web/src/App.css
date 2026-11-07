@@ -1376,3 +1376,399 @@ dialog::backdrop {
   width: 64px;
   height: 64px;
 }
+
+/* Books: every page side by side, so the whole can be judged and each page answered */
+
+.book {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.book-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 16px;
+  align-items: end;
+}
+
+.book-head .link-btn {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+.book-head h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.book-progress {
+  grid-column: 1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.book-tracks {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.book-track {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.book-track .page-actions {
+  margin-top: 0;
+}
+
+.page-audio {
+  width: 100%;
+}
+
+.page-plate video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.page-last-frame {
+  margin: 0;
+}
+
+.page-last-frame img {
+  display: block;
+  width: 100%;
+}
+
+.page-last-frame figcaption {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.page-head-seconds {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.page-head-seconds input {
+  width: 72px;
+}
+
+.page-body > .page-status {
+  align-self: flex-start;
+}
+
+.packs {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.pack-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+}
+
+.pack-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pack-head h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.pack-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.pack-facts dt {
+  color: var(--muted);
+}
+
+.pack-facts dd {
+  margin: 0;
+}
+
+.pack-licenses {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 12px 0;
+  list-style: none;
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.pack-licenses label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: 12px;
+}
+
+.pack-licenses p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.pack-stage,
+.pack-error {
+  margin: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.pack-log pre {
+  max-height: 240px;
+  margin: 8px 0 0;
+  overflow: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.book-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.book-links a {
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.book-links a:hover {
+  border-color: var(--amber);
+}
+
+.book-exports,
+.book-sheets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.book-exports li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.book-exports a {
+  color: var(--amber);
+}
+
+.book-sheets li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 4px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--bg-raise);
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.book-sheets img {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+}
+
+.page-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 18px;
+}
+
+.page-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.page-card.is-approved {
+  border-color: var(--ok);
+}
+
+.page-card.is-redo {
+  border-color: var(--red);
+}
+
+.page-plate {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 4 / 3;
+  background: var(--bg-raise);
+}
+
+.page-plate img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.page-candidates {
+  display: flex;
+  gap: 4px;
+  padding: 6px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.page-candidates button {
+  flex: none;
+  width: 56px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: var(--radius);
+  background: none;
+}
+
+.page-candidates button[aria-pressed='true'] {
+  border-color: var(--amber);
+}
+
+.page-candidates img {
+  display: block;
+  width: 100%;
+}
+
+.page-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+}
+
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.page-number {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.page-status.is-approved {
+  color: var(--ok);
+}
+
+.page-status.is-redo {
+  color: var(--red);
+}
+
+.page-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.page-source {
+  margin: 0;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.page-source.is-missing {
+  color: var(--red);
+}
+
+.page-note {
+  margin: 0;
+  padding: 6px 8px;
+  border-left: 2px solid var(--red);
+  background: var(--red-dim);
+  font-size: 13px;
+}
+
+.page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.page-redo label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.page-redo textarea {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+@media (max-width: 640px) {
+  .book-head {
+    grid-template-columns: 1fr;
+  }
+
+  .page-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.book .banner {
+  margin: 0;
+}

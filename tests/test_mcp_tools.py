@@ -61,7 +61,7 @@ async def test_generate_view_pick_export(api, tmp_path):
 
     assert "already finished" in await tools.cancel_job(api, job_id)
     status = await tools.studio_status(api)
-    assert "image models (Qwen-Image-2.1): ready" in status
+    assert "image models (Qwen-Image-2.1-Turbo): ready" in status
     assert "gallery: http://127.0.0.1:8765/" in status
     assert "animation (sprite-gen + codex, cloud): not ready (sprite-gen not found at " in status
 
@@ -137,6 +137,21 @@ async def test_server_registers_every_tool():
         "set_asset_status",
         "export_asset",
         "cancel_job",
+        "create_book",
+        "get_book",
+        "set_book_pages",
+        "set_book_sheets",
+        "set_book_terms",
+        "set_book_cover",
+        "generate_sheet",
+        "generate_pages",
+        "set_page",
+        "check_book_sources",
+        "export_book",
+        "generate_narration",
+        "list_packs",
+        "generate_clips",
+        "set_page_motion",
     }
     reference = listed["update_project"].input_schema["properties"]["reference_image"]
     assert "must be an absolute path; it is copied into the studio" in reference["description"]
@@ -144,6 +159,55 @@ async def test_server_registers_every_tool():
     assert kind["enum"] == ["sprite", "icon"]
     assert listed["get_job"].output_schema is None  # previews come back as image content, not JSON
     assert all(t.description for t in listed.values())
+
+
+async def test_only_the_person_approves_a_page():
+    listed = {t.name: t for t in await server.mcp.list_tools()}
+    status = listed["set_page"].input_schema["properties"]["status"]
+    assert "approved" not in str(status)
+
+
+async def test_book_flow(api):
+    await tools.create_project(api, "story", "Story", style="Ink wash.")
+    created = await tools.create_book(api, "story", "A Book", {"label": "A Work"})
+    book_id = created.splitlines()[1].split()[1]
+    text = await tools.set_book_pages(
+        api,
+        book_id,
+        [
+            {
+                "number": 1,
+                "text": "Words.",
+                "image_prompt": "A scene.",
+                "source_refs": [{"node_id": "n1", "content_version": 2, "label": "Chapter 1"}],
+            },
+            {"number": 2, "text": "More.", "image_prompt": "Another."},
+        ],
+    )
+    assert "rests on Chapter 1" in text
+    assert "NO SOURCE RECORDED" in text
+    await tools.set_book_terms(api, book_id, [{"term": "abc", "spoken": "a b c"}])
+
+    queued = await tools.generate_pages(api, book_id)
+    assert "Queued 2 pages" in queued
+    job_ids = queued.split(": ", 1)[1].split(". ")[0].split(", ")
+    for job_id in job_ids:
+        await tools.get_job(api, job_id, wait_seconds=10)
+
+    view = await tools.get_book(api, book_id)
+    assert "0/2 pages approved" in view[0]
+    assert "license of the chosen pictures: research_only" in view[0]
+    assert f"/#/books/{book_id}" in view[0]
+    assert sum(isinstance(item, tools.Image) for item in view) == 2
+
+    pages = (await api.get_book(book_id))["pages"]
+    sent_back = await tools.set_page(api, pages[0]["id"], status="redo", note="Darker, please.")
+    assert "the person asks: Darker, please." in sent_back
+
+    assert "Every page rests" in await tools.check_book_sources(api, book_id, {"n1": 2})
+    assert "was version 2, now 3" in await tools.check_book_sources(api, book_id, {"n1": 3})
+    with pytest.raises(BackendError, match="not approved"):
+        await tools.export_book(api, book_id)
 
 
 async def test_bgm_flow(api, tmp_path):
@@ -173,7 +237,7 @@ async def test_bgm_tool_description():
         " ".join(listed["generate_bgm"].description.split())
     )
     kinds = listed["list_assets"].input_schema["properties"]["kind"]["anyOf"][0]["enum"]
-    assert kinds == ["sprite", "icon", "bgm", "animation"]
+    assert kinds == ["sprite", "icon", "bgm", "animation", "page_image", "narration", "clip", "book_export"]
 
 
 async def test_animation_tool_description():
@@ -216,3 +280,24 @@ async def test_animation_flow(animation_api, tmp_path):
         str(tmp_path / "Game" / "shadow_anim.json"),
         str(tmp_path / "Game" / "shadow_anim"),
     ]
+
+
+async def test_list_packs_says_who_must_act(api):
+    text = await tools.list_packs(api)
+    assert "speech-ko" in text
+    assert "not_installed" in text
+    assert "a person must agree to Apache License 2.0 in the gallery" in text
+    assert "/#/packs/speech-ko" in text
+
+
+async def test_the_server_has_no_tool_to_agree_or_install():
+    listed = {t.name for t in await server.mcp.list_tools()}
+    assert not {name for name in listed if "accept" in name or "install" in name or "remove" in name}
+
+
+async def test_narrating_without_the_pack_says_where_to_go(api):
+    await api.create_project("demo", "Demo")
+    book = await api.create_book("demo", "t", None)
+    await api.save_pages(book["id"], [{"number": 1, "text": "글"}])
+    with pytest.raises(BackendError, match="/#/packs/speech-ko"):
+        await tools.generate_narration(api, book["id"])

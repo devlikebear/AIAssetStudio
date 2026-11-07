@@ -11,7 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlparse
 
-from ..config import Settings
+from ..config import Settings, resolve_comfy
 from ..detach import spawn_detached
 from ..store.files import logs_dir
 from .client import ComfyClient, ComfyUnavailable
@@ -60,7 +60,7 @@ class ComfyLauncher:
             raise ComfyUnavailable(f"ComfyUI did not start within {self.timeout:g} s; see {self.log_path}")
 
     def _launch(self) -> None:
-        comfy_dir = self.settings.comfy_dir
+        comfy_dir = resolve_comfy(self.settings)
         # A venv install by default; the portable build keeps its Python in ..\python_embeded (AIAS_COMFY_PYTHON).
         python = Path(self.settings.comfy_python or comfy_dir / ".venv" / "Scripts" / "python.exe")
         if not python.is_file() or not (comfy_dir / "main.py").is_file():

@@ -153,7 +153,7 @@ def test_mark_stale_running_failed(db):
 def test_schema_version_and_reopen(tmp_path):
     path = tmp_path / "studio.db"
     first = Database(path)
-    assert first.schema_version() == SCHEMA_VERSION == 2
+    assert first.schema_version() == SCHEMA_VERSION
     first.create_project("demo", "Demo")
     first.close()
     second = Database(path)
@@ -177,7 +177,7 @@ def test_v1_database_is_upgraded_in_place(tmp_path):
     old.close()
 
     db = Database(path)
-    assert db.schema_version() == 2
+    assert db.schema_version() == SCHEMA_VERSION
     p = db.get_project("lastlight")
     assert (p.name, p.pixel_art, p.logical_width, p.animation_cloud) == ("LAST LIGHT", True, 32, False)
     job = db.get_job("job1")

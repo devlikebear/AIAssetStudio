@@ -14,19 +14,31 @@ from ..store.files import logs_dir
 
 log = logging.getLogger(__name__)
 
+CLIENT_HEADER = "X-Studio-Client"
 HEALTH_TIMEOUT = 5.0
 START_TIMEOUT = 30.0
 
 
 class BackendError(Exception):
-    """The backend refused a request, or could not be reached or started. The message is meant for the user."""
+    """The backend refused a request, or could not be reached or started. The message is meant for the user. `detail`
+    is the backend's own answer when it says more than a sentence, such as a consent request's gallery URL."""
+
+    def __init__(self, message: str, detail: dict | None = None):
+        super().__init__(message)
+        self.detail = detail or {}
+
+
+def _error_detail(r: httpx.Response) -> object:
+    try:
+        return r.json().get("detail", r.text)
+    except ValueError:
+        return r.text
 
 
 def _error_message(r: httpx.Response) -> str:
-    try:
-        detail = r.json().get("detail", r.text)
-    except ValueError:
-        detail = r.text
+    detail = _error_detail(r)
+    if isinstance(detail, dict):
+        detail = detail.get("message", detail)
     if isinstance(detail, list):  # FastAPI validation errors
         detail = "; ".join(f"{'.'.join(str(p) for p in d.get('loc', [])[1:])}: {d.get('msg')}" for d in detail)
     return f"HTTP {r.status_code}: {detail}"
@@ -43,6 +55,7 @@ class StudioApi:
         spawn: Callable[..., object] = spawn_detached,
         start_timeout: float = START_TIMEOUT,
         interval: float = 0.5,
+        client: str | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.log_path = log_path
@@ -50,18 +63,23 @@ class StudioApi:
         self.spawn = spawn
         self.start_timeout = start_timeout
         self.interval = interval
+        # The MCP server passes no client: the API refuses it what only a person or the CLI may do.
+        headers = {CLIENT_HEADER: client} if client else {}
         self._http = httpx.AsyncClient(
-            base_url=self.base_url, transport=transport, timeout=httpx.Timeout(30.0, connect=5.0)
+            base_url=self.base_url, transport=transport, timeout=httpx.Timeout(30.0, connect=5.0), headers=headers
         )
         self._lock = asyncio.Lock()
 
     @classmethod
-    def from_settings(cls, settings: Settings) -> "StudioApi":
+    def from_settings(cls, settings: Settings, client: str | None = None) -> "StudioApi":
         # Host, port and data folder on the command line, not only in the environment: the stop command in the README
         # and the smoke scripts find a backend by its command line.
         serve = ["serve", "--host", settings.host, "--port", str(settings.port), "--data-dir", str(settings.data_dir)]
         return cls(
-            f"http://{settings.host}:{settings.port}", log_path=logs_dir(settings) / "backend.log", serve_args=serve
+            f"http://{settings.host}:{settings.port}",
+            log_path=logs_dir(settings) / "backend.log",
+            serve_args=serve,
+            client=client,
         )
 
     async def aclose(self) -> None:
@@ -113,7 +131,8 @@ class StudioApi:
         except httpx.TransportError as e:
             raise BackendError(f"backend not reachable at {self.base_url}: {e!r}") from e
         if r.status_code >= 400:
-            raise BackendError(_error_message(r))
+            detail = _error_detail(r)
+            raise BackendError(_error_message(r), detail if isinstance(detail, dict) else None)
         return r
 
     async def status(self) -> dict:
@@ -175,3 +194,66 @@ class StudioApi:
 
     async def get_file(self, asset_id: str, name: str) -> bytes:
         return (await self._request("GET", f"/api/assets/{asset_id}/files/{name}")).content
+
+    async def create_book(self, project: str, title: str, source: dict | None, **size) -> dict:
+        body = {"project": project, "title": title, "source": source}
+        return (await self._request("POST", "/api/books", json=body | {k: v for k, v in size.items() if v})).json()
+
+    async def get_book(self, book_id: str) -> dict:
+        return (await self._request("GET", f"/api/books/{book_id}")).json()
+
+    async def update_book(self, book_id: str, **fields) -> dict:
+        return (await self._request("PATCH", f"/api/books/{book_id}", json=fields)).json()
+
+    async def save_pages(self, book_id: str, pages: list[dict]) -> dict:
+        return (await self._request("PUT", f"/api/books/{book_id}/pages", json=pages)).json()
+
+    async def save_sheets(self, book_id: str, sheets: list[dict]) -> dict:
+        return (await self._request("PUT", f"/api/books/{book_id}/sheets", json=sheets)).json()
+
+    async def set_terms(self, book_id: str, terms: list[dict]) -> list[dict]:
+        return (await self._request("PUT", f"/api/books/{book_id}/terms", json=terms)).json()
+
+    async def generate_pages(self, book_id: str, pages: list[int] | None, seed: int | None) -> list[str]:
+        body = {"pages": pages, "seed": seed}
+        return (await self._request("POST", f"/api/books/{book_id}/generate", json=body)).json()["job_ids"]
+
+    async def generate_sheet(self, sheet_id: str, seed: int | None) -> str:
+        r = await self._request("POST", f"/api/sheets/{sheet_id}/generate", json={"seed": seed})
+        return r.json()["job_id"]
+
+    async def update_page(self, page_id: str, **fields) -> dict:
+        return (await self._request("PATCH", f"/api/pages/{page_id}", json=fields)).json()
+
+    async def check_sources(self, book_id: str, versions: dict[str, int]) -> list[dict]:
+        r = await self._request("POST", f"/api/books/{book_id}/check-sources", json={"versions": versions})
+        return r.json()
+
+    async def export_book(self, book_id: str, allow_draft: bool, format: str = "pdf") -> str:
+        body = {"allow_draft": allow_draft, "format": format}
+        return (await self._request("POST", f"/api/books/{book_id}/export", json=body)).json()["job_id"]
+
+    async def narrate_pages(self, book_id: str, pages: list[int] | None, seed: int | None) -> list[str]:
+        body = {"pages": pages, "seed": seed}
+        return (await self._request("POST", f"/api/books/{book_id}/narrate", json=body)).json()["job_ids"]
+
+    async def generate_clips(
+        self, book_id: str, pages: list[int] | None, seed: int | None, model: str = "ltx", seconds: float = 5
+    ) -> list[str]:
+        body = {"pages": pages, "seed": seed, "model": model, "seconds": seconds}
+        return (await self._request("POST", f"/api/books/{book_id}/clips", json=body)).json()["job_ids"]
+
+    async def list_packs(self) -> list[dict]:
+        return (await self._request("GET", "/api/packs")).json()
+
+    async def get_pack(self, pack_id: str) -> dict:
+        return (await self._request("GET", f"/api/packs/{pack_id}")).json()
+
+    async def install_pack(self, pack_id: str) -> dict:
+        return (await self._request("POST", f"/api/packs/{pack_id}/install")).json()
+
+    async def cancel_pack(self, pack_id: str) -> dict:
+        return (await self._request("POST", f"/api/packs/{pack_id}/cancel")).json()
+
+    async def remove_pack(self, pack_id: str) -> dict:
+        return (await self._request("DELETE", f"/api/packs/{pack_id}")).json()

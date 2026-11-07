@@ -312,3 +312,97 @@ async def test_animation_time_limit(env):
     job = add_job(e, "codex")
     await e.queue.start()
     assert (await wait_status(e, job.id, "failed")).error == "timeout after 0.2 s"
+
+
+class Sidecar:
+    def __init__(self):
+        self.running = False
+        self.events = []
+
+    async def ensure(self):
+        self.running = True
+        self.events.append("up")
+
+    async def stop(self):
+        self.running = False
+        self.events.append("down")
+
+
+async def test_speech_starts_its_server_and_never_needs_comfyui(env):
+    e = await env()
+    e.fake.down = True
+    e.queue.sidecar = sidecar = Sidecar()
+    await e.queue.start()
+    job = add_job(e, family="tts")
+    await wait_status(e, job.id, "done")
+    assert sidecar.events == ["up"]
+    assert e.queue.models_loaded is False
+    assert e.queue.current_family == "tts"
+
+
+async def test_speech_after_images_frees_comfyui_and_images_after_speech_end_the_server(env):
+    e = await env()
+    e.queue.sidecar = sidecar = Sidecar()
+    await e.queue.start()
+    image = add_job(e)
+    await wait_status(e, image.id, "done")
+    assert e.queue.models_loaded is True
+
+    speech = add_job(e, family="tts")
+    await wait_status(e, speech.id, "done")
+    assert len(e.fake.free_calls) == 1
+    assert e.queue.models_loaded is False
+    assert e.db.get_job(speech.id).timings == {"free_before": True}
+
+    image = add_job(e)
+    await wait_status(e, image.id, "done")
+    assert sidecar.events == ["up", "down"]
+    assert sidecar.running is False
+    assert len(e.fake.free_calls) == 1  # nothing of ComfyUI's was loaded
+
+
+async def test_a_cloud_job_gives_the_gpu_back_too(env):
+    e = await env()
+    e.queue.sidecar = sidecar = Sidecar()
+    await e.queue.start()
+    await wait_status(e, add_job(e, family="tts").id, "done")
+    await wait_status(e, add_job(e, family="codex").id, "done")
+    assert sidecar.events == ["up", "down"]
+
+
+async def test_idle_ends_the_server_without_touching_comfyui(env):
+    e = await env(idle_free_seconds=0.05)
+    e.queue.sidecar = sidecar = Sidecar()
+    await e.queue.start()
+    await wait_status(e, add_job(e, family="tts").id, "done")
+    async with asyncio.timeout(2):
+        while sidecar.running:
+            await asyncio.sleep(0.01)
+    assert e.fake.free_calls == []
+    assert e.queue.current_family is None
+
+
+async def test_a_cancelled_speech_job_ends_the_server(env):
+    gate = asyncio.Event()
+
+    async def blocked(ctx, job):
+        gate.set()
+        await asyncio.sleep(60)
+
+    e = await env(runner=blocked)
+    e.queue.sidecar = sidecar = Sidecar()
+    await e.queue.start()
+    job = add_job(e, family="tts")
+    await asyncio.wait_for(gate.wait(), 2)
+    await e.queue.cancel(job.id)
+    assert e.db.get_job(job.id).status == "cancelled"
+    assert sidecar.events == ["up", "down"]
+
+
+async def test_stopping_the_queue_ends_the_server(env):
+    e = await env()
+    e.queue.sidecar = sidecar = Sidecar()
+    await e.queue.start()
+    await wait_status(e, add_job(e, family="tts").id, "done")
+    await e.queue.stop()
+    assert sidecar.running is False

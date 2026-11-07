@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from ..comfy.client import ComfyClient, ComfyError, ComfyUnavailable
 from ..comfy.launcher import ComfyLauncher
 from ..config import Settings
+from ..packs.sidecar import SidecarManager
 from ..store.db import Database, now
 from ..store.models import Job
 from .runners import JobCancelled, RunContext
@@ -23,6 +24,10 @@ COMFYUI_DOWN = "comfyui_down"
 # they do not change which models are loaded. The MVP still runs them in this one queue, so GPU jobs wait behind
 # them (roadmap Out of Scope: a separate cloud queue).
 CLOUD_FAMILIES = ("codex",)
+# Jobs that use neither ComfyUI nor the GPU (laying out a book). They wait in the queue like the rest but touch nothing.
+LOCAL_FAMILIES = ("none",)
+# Jobs on a pack's own server instead of ComfyUI (narration). The GPU cannot hold both: going to one clears the other.
+SIDECAR_FAMILIES = ("tts",)
 
 
 class JobQueue:
@@ -33,12 +38,14 @@ class JobQueue:
         settings: Settings,
         runners: dict[str, Runner],
         launcher: ComfyLauncher | None = None,
+        sidecar: SidecarManager | None = None,
     ):
         self.db = db
         self.comfy = comfy
         self.settings = settings
         self.runners = runners
         self.launcher = launcher
+        self.sidecar = sidecar
         self.current_family: str | None = None
         self.models_loaded = False
         self.running_job_id: str | None = None
@@ -71,6 +78,7 @@ class JobQueue:
             except (ComfyError, TimeoutError) as e:
                 log.warning("POST /free while stopping failed: %s", e)
             self.models_loaded = False
+        await self._stop_sidecar()
 
     def notify(self) -> None:
         """Wake the worker after a job was added."""
@@ -102,19 +110,29 @@ class JobQueue:
             else:
                 await self._run(job)
 
+    @property
+    def _sidecar_up(self) -> bool:
+        return self.sidecar is not None and self.sidecar.running
+
+    async def _stop_sidecar(self) -> None:
+        if self._sidecar_up:
+            await self.sidecar.stop()
+
     async def _idle(self) -> None:
-        if not self.models_loaded:
+        if not self.models_loaded and not self._sidecar_up:
             await self._wake.wait()
             return
         try:
             await asyncio.wait_for(self._wake.wait(), timeout=self.settings.idle_free_seconds)
         except TimeoutError:
-            log.info("queue idle for %g s: freeing ComfyUI memory (POST /free)", self.settings.idle_free_seconds)
-            try:
-                await self.comfy.free()
-            except ComfyError as e:
-                log.warning("POST /free failed: %s", e)
-            self.models_loaded = False
+            await self._stop_sidecar()
+            if self.models_loaded:
+                log.info("queue idle for %g s: freeing ComfyUI memory (POST /free)", self.settings.idle_free_seconds)
+                try:
+                    await self.comfy.free()
+                except ComfyError as e:
+                    log.warning("POST /free failed: %s", e)
+                self.models_loaded = False
             self.current_family = None
 
     async def _run(self, job: Job) -> None:
@@ -122,11 +140,23 @@ class JobQueue:
         if runner is None:
             self.db.update_job(job.id, status="failed", error=f"no runner for job kind {job.kind!r}", finished_at=now())
             return
-        timeouts = {"bgm": self.settings.bgm_timeout, "animation": self.settings.animation_timeout}
+        timeouts = {
+            "bgm": self.settings.bgm_timeout,
+            "animation": self.settings.animation_timeout,
+            "narration": self.settings.narration_timeout,
+            "clip": self.settings.clip_timeout,
+            "book_export": self.settings.video_timeout,
+        }
         timeout = timeouts.get(job.kind, self.settings.image_timeout)
         self.db.update_job(job.id, status="running", started_at=now(), stage="starting")
         log.info("job %s started (%s/%s)", job.id, job.kind, job.family)
-        ctx = RunContext(self.db, self.comfy, self.settings, cancel_requested=lambda: job.id in self._cancel_requested)
+        ctx = RunContext(
+            self.db,
+            self.comfy,
+            self.settings,
+            cancel_requested=lambda: job.id in self._cancel_requested,
+            sidecar=self.sidecar,
+        )
         self.running_job_id = job.id
         self._run_done = asyncio.Event()
         self._run_task = asyncio.create_task(
@@ -158,14 +188,16 @@ class JobQueue:
 
             if status != "done" and not comfy_down:
                 await self._abort_comfy(ctx)
+            if status != "done" and job.family in SIDECAR_FAMILIES:
+                await self._stop_sidecar()  # it would keep speaking a page nobody wants, with no way to interrupt it
             final = {"status": status, "error": error, "finished_at": now()}
             if ctx.freed_before:  # merged last: runners write their own timings and would overwrite it
                 final["timings"] = (self.db.get_job(job.id).timings or {}) | {"free_before": True}
             self.db.update_job(job.id, **final)
             log.info("job %s %s%s", job.id, status, f": {error}" if error else "")
-            if not comfy_down and job.family not in CLOUD_FAMILIES:
+            if not comfy_down and job.family not in (*CLOUD_FAMILIES, *LOCAL_FAMILIES):
                 self.current_family = job.family
-                self.models_loaded = True
+                self.models_loaded = self.models_loaded or job.family not in SIDECAR_FAMILIES
         finally:
             self.running_job_id = None
             self._run_task = None
@@ -173,6 +205,18 @@ class JobQueue:
             self._run_done.set()
 
     async def _start_comfy_then_run(self, runner: Runner, ctx: RunContext, job: Job, timeout: float) -> None:
+        if job.family in LOCAL_FAMILIES:
+            await asyncio.wait_for(runner(ctx, job), timeout)
+            return
+        if job.family in SIDECAR_FAMILIES:
+            # Starting it can take minutes; like ComfyUI's start, outside the runner's time limit.
+            if self.models_loaded:
+                await self._free_before(ctx, job, "narration")
+            self.db.update_job(job.id, stage="starting the speech model")
+            await self.sidecar.ensure()
+            await asyncio.wait_for(runner(ctx, job), timeout)
+            return
+        await self._stop_sidecar()  # every other job that reaches here wants the GPU, or gives it back
         if job.family in CLOUD_FAMILIES:
             # The GPU sits unused for the minutes this job takes, yet the idle /free cannot run while the worker is
             # busy: give the shared GPU back now, as the idle rule would.

@@ -40,12 +40,11 @@ npm --prefix web run build
 
 | 용도 | 모델 | 파일 (ComfyUI `models/` 아래) | 라이선스 |
 |---|---|---|---|
-| 스프라이트·아이콘 | [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) | `diffusion_models/qwen_image_2.1_int8_convrot.safetensors`, `text_encoders/qwen3vl_8b_int8_convrot.safetensors`, `vae/qwen_image_2.1_vae_bf16.safetensors` | Qwen Research License (연구·평가용, 비상업) |
-| 이미지 6스텝 가속 | [Viggle Turbo](https://huggingface.co/Viggle/Qwen-Image-2.1-viggle-turbo) | `loras/Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r128.safetensors` + 커스텀 노드 `ViggleTurboLora`·`ViggleTurboSigmas` | Qwen Research License |
+| 스프라이트·아이콘·책 그림 | [Qwen-Image-2.1-Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo) | `diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors`, `text_encoders/qwen3vl_8b_int8_convrot.safetensors`, `vae/qwen_image_2.1_vae_bf16.safetensors` | Qwen Research License (연구·평가용, 비상업) |
 | 연주곡 | [ACE-Step 1.5](https://huggingface.co/ACE-Step/Ace-Step1.5) | `diffusion_models/acestep_v1.5_turbo.safetensors`, `text_encoders/qwen_0.6b_ace15.safetensors`, `text_encoders/qwen_4b_ace15.safetensors`, `vae/ace_1.5_vae.safetensors` | MIT |
 | 보컬 곡 | [YuE2](https://github.com/multimodal-art-projection/YuE) | `checkpoints/yue2_3b_int8_convrot.safetensors` | CC BY-NC 4.0 + 창작자 허용(개인·창작자는 결과물로 수익을 낼 수 있고, 회사는 상업 라이선스가 필요) |
 
-- **판매할 게임의 이미지**: Qwen-Image-2.1과 Viggle Turbo는 비상업 라이선스다. 판매용 게임의 에셋을 만들려면 상업
+- **판매할 게임의 이미지**: Qwen-Image-2.1-Turbo는 비상업 라이선스다. 판매용 게임의 에셋을 만들려면 상업
   라이선스를 따로 받거나 이미지 모델을 바꿔야 한다.
 - **애니메이션**: [sprite-gen](https://github.com/aldegad/sprite-gen)(Apache-2.0)이 OpenAI의 codex CLI로 만든다. 보내는
   그림과 결과물에는 OpenAI 이용 약관이 적용된다.

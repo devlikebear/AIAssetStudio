@@ -8,17 +8,20 @@ import {
   getStatus,
   type Job,
   listAssets,
+  listBooks,
   listJobs,
   listProjects,
   setAssetStatus,
 } from './api'
+import { BookView } from './components/BookView'
 import { CopyButton } from './components/CopyButton'
 import { DetailModal } from './components/DetailModal'
 import { JobGroup } from './components/JobGroup'
+import { PacksView } from './components/PacksView'
 import { ProjectInfo } from './components/ProjectInfo'
 import { QueuePanel } from './components/QueuePanel'
 import { StatusBanner } from './components/StatusBanner'
-import { jobKind, KIND_LABEL, mcpAddCommand } from './format'
+import { isBookJob, jobKind, KIND_LABEL, mcpAddCommand } from './format'
 import { useHashRoute, usePoll, useStoredState } from './hooks'
 import './App.css'
 
@@ -74,7 +77,9 @@ export default function App() {
     3000,
     `sheet:${slug ?? ''}`,
   )
-  const [jobs, assets] = sheet.data ?? [undefined, undefined]
+  const [allJobs, assets] = sheet.data ?? [undefined, undefined]
+  const jobs = useMemo(() => allJobs?.filter((job) => !isBookJob(job)), [allJobs])
+  const books = usePoll(slug ? () => listBooks(slug) : null, 10000, `books:${slug ?? ''}`)
 
   const assetsByJob = useMemo(() => {
     const byJob = new Map<string, Asset[]>()
@@ -148,6 +153,9 @@ export default function App() {
           <span className="wordmark-lamp" aria-hidden />
           AI ASSET STUDIO
         </a>
+        <a className="link-btn" href="#/packs">
+          기능 팩
+        </a>
 
         {projects.data && projects.data.length > 0 && (
           <div className="project-picker">
@@ -212,25 +220,42 @@ export default function App() {
 
       <div className="layout">
         <main className="sheet">
-          {projects.data && projects.data.length === 0 && <NoProjects repoDir={status.data?.repo_dir} />}
-          {project && jobs && jobs.length === 0 && <NoAssets projectName={project.name} />}
-          {project && jobs && jobs.length > 0 && shownJobs.length === 0 && (
-            <p className="sheet-empty">이 필터에 맞는 후보가 없습니다.</p>
+          {route.packs ? (
+            <PacksView packId={route.packId} onError={setActionError} />
+          ) : route.bookId ? (
+            <BookView bookId={route.bookId} onError={setActionError} />
+          ) : (
+            <>
+              {projects.data && projects.data.length === 0 && <NoProjects repoDir={status.data?.repo_dir} />}
+              {books.data && books.data.length > 0 && (
+                <nav className="book-links" aria-label="책">
+                  {books.data.map((book) => (
+                    <a key={book.id} href={`#/books/${encodeURIComponent(book.id)}`}>
+                      {book.title}
+                    </a>
+                  ))}
+                </nav>
+              )}
+              {project && jobs && jobs.length === 0 && !books.data?.length && <NoAssets projectName={project.name} />}
+              {project && jobs && jobs.length > 0 && shownJobs.length === 0 && (
+                <p className="sheet-empty">이 필터에 맞는 후보가 없습니다.</p>
+              )}
+              {shownJobs.map((job) => {
+                const all = assetsByJob.get(job.id) ?? []
+                return (
+                  <JobGroup
+                    key={job.id}
+                    job={job}
+                    assets={all.filter(visible)}
+                    made={all.length}
+                    highlighted={job.id === highlightId}
+                    onOpen={(a) => setOpenAssetId(a.id)}
+                    onSetStatus={updateStatus}
+                  />
+                )
+              })}
+            </>
           )}
-          {shownJobs.map((job) => {
-            const all = assetsByJob.get(job.id) ?? []
-            return (
-              <JobGroup
-                key={job.id}
-                job={job}
-                assets={all.filter(visible)}
-                made={all.length}
-                highlighted={job.id === highlightId}
-                onOpen={(a) => setOpenAssetId(a.id)}
-                onSetStatus={updateStatus}
-              />
-            )
-          })}
         </main>
 
         <QueuePanel

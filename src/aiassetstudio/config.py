@@ -26,6 +26,11 @@ class Settings:
     sprite_gen: str = str(SIBLING_DIR / "sprite-gen" / ".venv" / "Scripts" / "sprite-gen.exe")  # animations (own venv)
     codex_dir: str = ""  # folder of the codex CLI for sprite-gen; empty = find_codex_dir's search
     animation_timeout: float = 900  # seconds
+    book_font: str = r"C:\Windows\Fonts\batang.ttc"  # the text of exported books; a .ttf or a .ttc, first face
+    tts_port: int = 8766  # the speech pack's server, on this PC only
+    narration_timeout: float = 300  # seconds per page; a 26 s page took 50 s
+    clip_timeout: float = 900  # seconds per clip; one took about 190 s
+    video_timeout: float = 1800  # seconds to assemble a book's video, which also bounds its PDF and MP3
 
 
 # field -> (environment variable, converter)
@@ -43,6 +48,11 @@ _ENV = {
     "sprite_gen": ("AIAS_SPRITE_GEN", str),
     "codex_dir": ("AIAS_CODEX_DIR", str),
     "animation_timeout": ("AIAS_ANIMATION_TIMEOUT", float),
+    "book_font": ("AIAS_BOOK_FONT", str),
+    "tts_port": ("AIAS_TTS_PORT", int),
+    "narration_timeout": ("AIAS_NARRATION_TIMEOUT", float),
+    "clip_timeout": ("AIAS_CLIP_TIMEOUT", float),
+    "video_timeout": ("AIAS_VIDEO_TIMEOUT", float),
 }
 
 
@@ -59,6 +69,25 @@ def is_loopback(host: str) -> bool:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+def engine_comfy_dir(settings: Settings) -> Path:
+    """Where the engine-comfyui pack keeps ComfyUI."""
+    return settings.data_dir / "packs" / "engine-comfyui" / "ComfyUI"
+
+
+def comfy_is_external(settings: Settings) -> bool:
+    """A ComfyUI this app did not install: next to the repository or at AIAS_COMFY_DIR. It is used as it is, never
+    updated or changed, and the engine pack is not needed."""
+    return (settings.comfy_dir / "main.py").is_file()
+
+
+def resolve_comfy(settings: Settings) -> Path:
+    """The ComfyUI to run: the external one if there is one, else the engine pack's."""
+    engine = engine_comfy_dir(settings)
+    if comfy_is_external(settings) or not (engine / "main.py").is_file():
+        return settings.comfy_dir
+    return engine
 
 
 def find_codex_dir(settings: Settings) -> Path | None:

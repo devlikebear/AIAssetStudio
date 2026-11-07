@@ -7,9 +7,12 @@ from pydantic import BaseModel, BeforeValidator, Field, StringConstraints, field
 
 from ..comfy.graphs import KEYSCALES
 from ..store.files import SLUG_PATTERN
-from ..store.models import Asset, AssetStatus, Job
+from ..store.models import Asset, AssetStatus, Book, ClipMethod, Job, Page, Sheet, SheetKind, Term
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+LongText = Annotated[str, StringConstraints(strip_whitespace=True, max_length=4000)]
+PictureSide = Annotated[int, Field(ge=512, le=1536, multiple_of=16)]
+PageNumber = Annotated[int, Field(ge=1, le=999)]
 Style = Annotated[str, StringConstraints(strip_whitespace=True, max_length=2000)]
 LogicalSize = Annotated[int, Field(ge=8, le=256)]
 ColorCount = Annotated[int, Field(ge=2, le=64)]
@@ -145,3 +148,153 @@ class AssetOut(Asset):
 
 class JobOut(Job):
     assets: list[AssetOut] = Field(default_factory=list)
+
+
+class BookCreate(BaseModel):
+    project: str
+    title: Name
+    source: dict | None = None  # where the work comes from: {"system", "work_id", "label"}; shown, never fetched
+    width: PictureSide = 1184  # the size of the 2026-11-01 trial, near 4:3; Qwen-Image keeps a 16 px grid
+    height: PictureSide = 880
+
+
+class BookUpdate(BaseModel):
+    title: Name | None = None
+    cover_page: PageNumber | None = None
+
+
+class SourceRef(BaseModel):
+    node_id: str
+    content_version: int
+    label: str = ""
+
+
+class PageIn(BaseModel):
+    number: PageNumber
+    text: LongText = ""
+    image_prompt: LongText = ""
+    people: list[Name] = Field(default_factory=list)
+    props: list[Name] = Field(default_factory=list)
+    place: Annotated[str, StringConstraints(strip_whitespace=True, max_length=500)] | None = None
+    source_refs: list[SourceRef] = Field(default_factory=list)
+
+
+class SheetIn(BaseModel):
+    kind: SheetKind
+    name: Name
+    description: Annotated[str, StringConstraints(strip_whitespace=True, max_length=2000)] = ""
+    asset_id: str | None = None
+
+
+class TermIn(BaseModel):
+    term: Name
+    spoken: Name
+
+
+class PageUpdate(BaseModel):
+    status: Literal["approved", "redo", "draft"] | None = None
+    note: LongText | None = None
+    image_asset_id: str | None = None
+    narration_status: Literal["approved", "redo", "draft"] | None = None
+    narration_note: LongText | None = None
+    narration_asset_id: str | None = None
+    motion_prompt: LongText | None = None
+    motion_still: bool | None = None
+    clip_status: Literal["approved", "redo", "draft"] | None = None
+    clip_note: LongText | None = None
+    clip_asset_id: str | None = None
+    clip_method: ClipMethod | None = None
+    clip_head_s: float | None = Field(None, ge=0.5, le=5.0)
+
+
+class GeneratePages(BaseModel):
+    pages: list[PageNumber] | None = None  # default: the pages in draft or redo
+    seed: int | None = Field(None, ge=0, le=2**53)  # default: a new one per page
+
+
+class GenerateClips(GeneratePages):
+    model: Literal["wan", "ltx"] = "ltx"  # LTX-2.5 since 2026-11-07: sharper, faster, no strangers walking in
+    seconds: float = Field(5, ge=3, le=10)  # Wan makes 5 s only
+
+    @model_validator(mode="after")
+    def check_seconds(self) -> "GenerateClips":
+        if self.model == "wan" and self.seconds != 5:
+            raise ValueError("Wan clips are 5 s long")
+        return self
+
+
+class GenerateSheet(BaseModel):
+    seed: int | None = Field(None, ge=0, le=2**53)
+
+
+class JobsCreated(BaseModel):
+    job_ids: list[str]
+
+
+class CheckSources(BaseModel):
+    versions: dict[str, int]  # node id -> its content_version now, read by the caller
+
+
+class StalePage(BaseModel):
+    number: int
+    node_id: str
+    label: str
+    was: int
+    now: int | None  # None: the caller did not list this passage
+
+
+class BookExportRequest(BaseModel):
+    format: Literal["pdf", "mp3", "mp4"] = "pdf"
+    allow_draft: bool = False  # include pages that were not approved
+
+
+class PageOut(Page):
+    candidates: list[AssetOut] = Field(default_factory=list)
+    narration_candidates: list[AssetOut] = Field(default_factory=list)
+    clip_candidates: list[AssetOut] = Field(default_factory=list)
+
+
+class SheetOut(Sheet):
+    asset: AssetOut | None = None
+
+
+class BookOut(Book):
+    pages: list[PageOut]
+    sheets: list[SheetOut]
+    terms: list[Term]
+    counts: dict[str, int]  # page status -> pages
+    narration_counts: dict[str, int]  # narration status -> pages
+    clip_counts: dict[str, int]  # clip status -> pages
+    license_class: str | None  # of the chosen pictures; None until one is chosen
+
+
+class PackAccept(BaseModel):
+    licenses: list[str]  # the ids a person ticked
+
+
+class PackLicenseOut(BaseModel):
+    id: str
+    name: str
+    class_: str
+    url: str
+    summary_ko: str
+    accepted: bool
+
+
+class PackOut(BaseModel):
+    id: str
+    title: str
+    feature: str
+    version: str
+    download_size: int
+    tested: dict
+    gated: bool
+    licenses: list[PackLicenseOut]
+    engine: str
+    status: str  # not_installed, external (a ComfyUI is already in use), or installing, installed, failed, cancelled
+    adopted: list[str]  # files that were already there; a removal leaves them
+    stage: str | None
+    error: str | None
+    license_changed: bool  # the text online differs from what the catalog holds; a new Studio version must follow it
+    installed_version: str | None
+    log_tail: str

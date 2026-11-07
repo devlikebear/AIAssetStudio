@@ -8,11 +8,12 @@ import json
 import logging
 import shutil
 import time
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Literal, get_args
+from typing import Annotated, get_args
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -26,23 +27,59 @@ from ..comfy.launcher import ComfyLauncher
 from ..config import REPO_ROOT, Settings
 from ..jobs.queue import JobQueue
 from ..jobs.runners import RUNNERS
+from ..narration import SPEECH_PACK
+from ..packs.catalog import PackSpec
+from ..packs.consent import ConsentRequired, accept, missing_consents
+from ..packs.manager import InsufficientDisk, PackError, PackManager
+from ..packs.sidecar import SidecarManager
+from ..provenance import worst_class
 from ..spritegen.access import animation_status
 from ..store.db import Database, DuplicateSlug, now
 from ..store.files import db_path, export_stem, from_rel, unique_stem
-from ..store.models import TERMINAL_STATUSES, Asset, AssetStatus, Job, JobStatus, Project
+from ..store.models import (
+    TERMINAL_STATUSES,
+    Asset,
+    AssetKind,
+    AssetStatus,
+    Book,
+    Job,
+    JobStatus,
+    Page,
+    Project,
+    Term,
+)
 from ..store.reference import ReferenceImageError, load_reference, store_reference
 from .schemas import (
     AnimationJobCreate,
     AssetOut,
     AssetUpdate,
     BgmJobCreate,
+    BookCreate,
+    BookExportRequest,
+    BookOut,
+    BookUpdate,
+    CheckSources,
     ExportRequest,
     ExportResult,
+    GenerateClips,
+    GeneratePages,
+    GenerateSheet,
     ImageJobCreate,
     JobCreated,
     JobOut,
+    JobsCreated,
+    PackAccept,
+    PackLicenseOut,
+    PackOut,
+    PageIn,
+    PageOut,
+    PageUpdate,
     ProjectCreate,
     ProjectUpdate,
+    SheetIn,
+    SheetOut,
+    StalePage,
+    TermIn,
     missing_pixel_fields,
 )
 
@@ -59,6 +96,10 @@ EXPORT_FILES = {
     "sprite": (("processed",),),
     "icon": (("processed",),),
     "bgm": (("loop_wav", "loop_ogg"), ("full_wav", "full_ogg")),
+    "page_image": (("processed",),),
+    "narration": (("wav",),),
+    "clip": (("mp4",),),
+    "book_export": (("pdf",), ("mp3",), ("mp4",)),
 }
 MEDIA_TYPES = {  # Windows' mimetypes lacks some
     ".flac": "audio/flac",
@@ -66,10 +107,20 @@ MEDIA_TYPES = {  # Windows' mimetypes lacks some
     ".ogg": "audio/ogg",
     ".gif": "image/gif",
     ".json": "application/json",
+    ".pdf": "application/pdf",
+    ".mp3": "audio/mpeg",
+    ".mp4": "video/mp4",
 }
+CLIP_SOURCE_FIELDS = ("image_asset_id", "motion_prompt", "motion_still")
 NOT_NULL_PROJECT_FIELDS = ("name", "style", "pixel_art", "animation_cloud")  # in a PATCH, null leaves these
 LOCAL_HOSTS = ("127.0.0.1", "localhost")
 ANY_ADDRESS = ("0.0.0.0", "::")
+# Who is asking, for the requests only a person or the CLI may make. A custom header, so a web page cannot send it
+# without CORS, which stays off. MCP sends none: an agent must not agree to a license or install by mistake. This is
+# not a security boundary against another program on this PC.
+CLIENT_HEADER = "X-Studio-Client"
+GALLERY_CLIENT = ("gallery",)
+PACK_CLIENTS = ("gallery", "cli")
 
 
 def allowed_hosts(settings: Settings) -> list[str]:
@@ -82,12 +133,20 @@ def allowed_hosts(settings: Settings) -> list[str]:
 
 
 class Services:
-    def __init__(self, settings: Settings, comfy_transport: httpx.AsyncBaseTransport | None):
+    def __init__(
+        self,
+        settings: Settings,
+        comfy_transport: httpx.AsyncBaseTransport | None,
+        make_packs: Callable[[Database], PackManager] | None = None,
+        sidecar: SidecarManager | None = None,
+    ):
         self.settings = settings
         self.db = Database(db_path(settings))
         self.comfy = ComfyClient(settings.comfy_url, transport=comfy_transport)
         self.launcher = ComfyLauncher(settings, self.comfy)
-        self.queue = JobQueue(self.db, self.comfy, settings, RUNNERS, launcher=self.launcher)
+        self.packs = make_packs(self.db) if make_packs else PackManager(settings, self.db)
+        self.sidecar = sidecar or SidecarManager(settings, self.packs.pack(SPEECH_PACK))
+        self.queue = JobQueue(self.db, self.comfy, settings, RUNNERS, launcher=self.launcher, sidecar=self.sidecar)
         self._preflight: dict[str, preflight.FamilyStatus] | None = None
         self._preflight_at = 0.0
         self._preflight_lock = asyncio.Lock()
@@ -97,6 +156,9 @@ class Services:
 
     async def start(self) -> None:
         await self.queue.start()
+        self.packs.start()
+        self.db.release_idle_pages()  # after the queue marked what a previous process left running as failed
+        self.db.release_idle_media()
         up = await self.comfy.is_up()
         if not up:
             log.warning("ComfyUI is not reachable at %s; jobs will fail until it runs", self.settings.comfy_url)
@@ -108,7 +170,9 @@ class Services:
                 log.warning("preflight %s: missing %s", family, status["missing_nodes"] + status["missing_models"])
 
     async def stop(self) -> None:
+        await self.packs.stop()
         await self.queue.stop()
+        await self.sidecar.aclose()
         await self.comfy.aclose()
         self.db.close()
 
@@ -145,6 +209,117 @@ def _project_or_404(s: Services, slug: str) -> Project:
     if project is None:
         raise HTTPException(404, f"project {slug!r} not found")
     return project
+
+
+def _book_or_404(s: Services, book_id: str) -> Book:
+    book = s.db.get_book(book_id)
+    if book is None:
+        raise HTTPException(404, f"book {book_id!r} not found")
+    return book
+
+
+def _book_out(s: Services, book: Book) -> BookOut:
+    s.db.release_idle_pages(book.id)
+    s.db.release_idle_media(book.id)
+    pages = s.db.list_pages(book.id)
+    candidates = {p.id: s.db.assets_with_meta("page_id", p.id) for p in pages}
+    records = []
+    for page in pages:
+        chosen = next((a for a in candidates[page.id] if a.id == page.image_asset_id), None)
+        records.extend(chosen.meta.get("licenses", []) if chosen else [])
+    sheets = []
+    for sheet in s.db.list_sheets(book.id):
+        asset = s.db.get_asset(sheet.asset_id) if sheet.asset_id else None
+        sheets.append(SheetOut(**sheet.model_dump(), asset=AssetOut.of(asset) if asset else None))
+    counts: dict[str, int] = {}
+    narration_counts: dict[str, int] = {}
+    clip_counts: dict[str, int] = {}
+    for page in pages:
+        counts[page.status] = counts.get(page.status, 0) + 1
+        narration_counts[page.narration_status] = narration_counts.get(page.narration_status, 0) + 1
+        clip_counts[page.clip_status] = clip_counts.get(page.clip_status, 0) + 1
+    return BookOut(
+        **book.model_dump(),
+        pages=[_page_out(s, p, candidates[p.id]) for p in pages],
+        sheets=sheets,
+        terms=s.db.list_terms(book.id),
+        counts=counts,
+        narration_counts=narration_counts,
+        clip_counts=clip_counts,
+        license_class=worst_class(records) if records else None,
+    )
+
+
+def _page_out(s: Services, page: Page, candidates: list[Asset]) -> PageOut:
+    takes = s.db.assets_with_meta("narration_page_id", page.id)
+    clips = s.db.assets_with_meta("clip_page_id", page.id)
+    return PageOut(
+        **page.model_dump(),
+        candidates=[AssetOut.of(a) for a in candidates],
+        narration_candidates=[AssetOut.of(a) for a in takes],
+        clip_candidates=[AssetOut.of(a) for a in clips],
+    )
+
+
+def _gallery_url(s: Services, path: str = "") -> str:
+    return f"http://{s.settings.host}:{s.settings.port}/{path}"
+
+
+def _pack_url(s: Services, pack_id: str) -> str:
+    return _gallery_url(s, f"#/packs/{pack_id}")
+
+
+def _pack_or_404(s: Services, pack_id: str) -> PackSpec:
+    pack = s.packs.pack(pack_id)
+    if pack is None:
+        raise HTTPException(404, f"pack {pack_id!r} not found")
+    return pack
+
+
+def _pack_out(s: Services, pack: PackSpec) -> PackOut:
+    row = s.db.get_install(pack.id)
+    missing = {lic.id for lic in missing_consents(s.db, pack)}
+    status = row.status if row else "not_installed"
+    if status == "installed" and not s.packs.is_installed(pack.id):
+        status = "not_installed"  # an older version: this one still needs consent and an install
+    if s.packs.is_external(pack):
+        status = "external"
+    return PackOut(
+        id=pack.id,
+        title=pack.title,
+        feature=pack.feature,
+        version=pack.version,
+        engine=pack.engine,
+        adopted=s.packs.adopted(pack),
+        download_size=pack.download_size,
+        tested=pack.tested.model_dump(),
+        gated=pack.gated,
+        licenses=[
+            PackLicenseOut(
+                id=lic.id,
+                name=lic.name,
+                class_=lic.class_,
+                url=lic.url,
+                summary_ko=lic.summary_ko,
+                accepted=lic.id not in missing,
+            )
+            for lic in pack.licenses
+        ],
+        status=status,
+        stage=row.stage if row else None,
+        error=row.error if row else None,
+        license_changed=bool(row and row.error and row.error.startswith("license_changed")),
+        installed_version=row.version if row and row.status == "installed" else None,
+        log_tail=s.packs.log_tail(pack.id),
+    )
+
+
+def _client_is(*allowed: str):
+    def check(request: Request) -> None:
+        if request.headers.get(CLIENT_HEADER) not in allowed:
+            raise HTTPException(403, f"only {' or '.join(allowed)} may do this")
+
+    return Depends(check)
 
 
 def _job_out(s: Services, job: Job) -> JobOut:
@@ -226,10 +401,15 @@ def _export_animation(s: Services, asset: Asset, dest: Path, stem: str) -> list[
     return [dest / f"{stem}.png", dest / f"{stem}.json", folder]
 
 
-def create_app(settings: Settings, comfy_transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
+def create_app(
+    settings: Settings,
+    comfy_transport: httpx.AsyncBaseTransport | None = None,
+    make_packs: Callable[[Database], PackManager] | None = None,
+    sidecar: SidecarManager | None = None,
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        services = Services(settings, comfy_transport)
+        services = Services(settings, comfy_transport, make_packs, sidecar)
         app.state.services = services
         await services.start()
         try:
@@ -275,7 +455,8 @@ def create_app(settings: Settings, comfy_transport: httpx.AsyncBaseTransport | N
                 "queued": s.db.count_jobs("queued"),
                 "current": _current_job(s),
             },
-            "gallery_url": f"http://{s.settings.host}:{s.settings.port}/",
+            "packs": {pack.id: _pack_out(s, pack).status for pack in s.packs.catalog.values()},
+            "gallery_url": _gallery_url(s),
             "repo_dir": str(REPO_ROOT),  # for the gallery's MCP registration command
         }
 
@@ -332,7 +513,7 @@ def create_app(settings: Settings, comfy_transport: httpx.AsyncBaseTransport | N
     async def create_image_job(body: ImageJobCreate, s: S) -> JobCreated:
         project = _project_or_404(s, body.project)
         params = body.model_dump(include={"kind", "description", "count", "seed"})
-        job = s.db.create_job(project.id, "image", "qwen", params)
+        job = s.db.create_job(project.id, "image", "qwen_turbo", params)
         s.queue.notify()
         return JobCreated(job_id=job.id)
 
@@ -401,13 +582,353 @@ def create_app(settings: Settings, comfy_transport: httpx.AsyncBaseTransport | N
             raise HTTPException(404, f"job {job_id!r} not found")
         return _job_out(s, job)
 
+    # --- books ----------------------------------------------------------------------------------
+
+    @app.post("/api/books", status_code=201)
+    async def create_book(body: BookCreate, s: S) -> BookOut:
+        project = _project_or_404(s, body.project)
+        return _book_out(s, s.db.create_book(project.id, body.title, body.source, body.width, body.height))
+
+    @app.get("/api/books")
+    async def list_books(s: S, project: str | None = None) -> list[Book]:
+        if project is not None:
+            _project_or_404(s, project)
+        return s.db.list_books(project)
+
+    @app.get("/api/books/{book_id}")
+    async def get_book(book_id: str, s: S) -> BookOut:
+        return _book_out(s, _book_or_404(s, book_id))
+
+    @app.patch("/api/books/{book_id}")
+    async def update_book(book_id: str, body: BookUpdate, s: S) -> BookOut:
+        _book_or_404(s, book_id)
+        fields = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+        return _book_out(s, s.db.update_book(book_id, **fields))
+
+    @app.put("/api/books/{book_id}/pages")
+    async def save_pages(book_id: str, pages: list[PageIn], s: S) -> BookOut:
+        """Add or change pages by number. A change to what a page shows sends it back to draft."""
+        book = _book_or_404(s, book_id)
+        s.db.save_pages(book_id, [p.model_dump(exclude_unset=True) for p in pages])
+        return _book_out(s, book)
+
+    @app.put("/api/books/{book_id}/sheets")
+    async def save_sheets(book_id: str, sheets: list[SheetIn], s: S) -> BookOut:
+        book = _book_or_404(s, book_id)
+        for sheet in sheets:
+            if sheet.asset_id is None:
+                continue
+            asset = s.db.get_asset(sheet.asset_id)
+            if asset is None or asset.project_id != book.project_id:
+                raise HTTPException(404, f"asset {sheet.asset_id!r} not found in project {book.project!r}")
+            if "processed" not in asset.files:
+                raise HTTPException(422, f"asset {asset.id} is a {asset.kind}; a sheet needs a picture")
+        s.db.save_sheets(book_id, [sheet.model_dump() for sheet in sheets])
+        return _book_out(s, book)
+
+    @app.put("/api/books/{book_id}/terms")
+    async def set_terms(book_id: str, terms: list[TermIn], s: S) -> list[Term]:
+        _book_or_404(s, book_id)
+        return s.db.set_terms(book_id, [t.model_dump() for t in terms])
+
+    @app.post("/api/books/{book_id}/generate", status_code=202)
+    async def generate_pages(book_id: str, body: GeneratePages, s: S) -> JobsCreated:
+        """One job per page. A new picture joins the page's candidates; an earlier choice stays until it is changed."""
+        book = _book_or_404(s, book_id)
+        s.db.release_idle_pages(book_id)
+        pages = s.db.list_pages(book_id)
+        if body.pages is None:
+            chosen = [p for p in pages if p.status in ("draft", "redo")]
+        else:
+            by_number = {p.number: p for p in pages}
+            if missing := [n for n in body.pages if n not in by_number]:
+                raise HTTPException(404, f"book {book_id!r} has no page {missing}")
+            chosen = [by_number[n] for n in dict.fromkeys(body.pages)]
+        if not chosen:
+            raise HTTPException(409, "no page to generate: none is in draft or redo")
+        if busy := [p.number for p in chosen if p.status == "queued"]:
+            raise HTTPException(409, f"pages {busy} are already being generated")
+        if empty := [p.number for p in chosen if not p.image_prompt]:
+            raise HTTPException(422, f"pages {empty} have no image_prompt")
+        job_ids = []
+        for page in chosen:
+            params = {
+                "book_id": book_id,
+                "page_id": page.id,
+                "page_number": page.number,
+                "description": f"{book.title}, page {page.number}",
+                "count": 1,
+                "seed": body.seed,
+            }
+            job_ids.append(s.db.create_job(book.project_id, "page_image", "qwen_turbo", params).id)
+            s.db.update_page(page.id, status="queued")
+        s.queue.notify()
+        return JobsCreated(job_ids=job_ids)
+
+    @app.post("/api/books/{book_id}/narrate", status_code=202)
+    async def narrate_pages(book_id: str, body: GeneratePages, s: S) -> JobsCreated:
+        """One job per page: a narrator reads the page's text. A new take joins the page's takes."""
+        book = _book_or_404(s, book_id)
+        if not s.packs.is_installed(SPEECH_PACK):
+            raise HTTPException(
+                409,
+                f"the speech pack is not installed. A person agrees to its license in the gallery: "
+                f"{_pack_url(s, SPEECH_PACK)}, then it installs there or with `aiassetstudio pack install {SPEECH_PACK}`",
+            )
+        s.db.release_idle_media(book_id)
+        pages = s.db.list_pages(book_id)
+        if body.pages is None:
+            chosen = [p for p in pages if p.narration_status in ("draft", "redo")]
+        else:
+            by_number = {p.number: p for p in pages}
+            if missing := [n for n in body.pages if n not in by_number]:
+                raise HTTPException(404, f"book {book_id!r} has no page {missing}")
+            chosen = [by_number[n] for n in dict.fromkeys(body.pages)]
+        if not chosen:
+            raise HTTPException(409, "no page to narrate: none is in draft or redo")
+        if busy := [p.number for p in chosen if p.narration_status == "queued"]:
+            raise HTTPException(409, f"pages {busy} are already being narrated")
+        if empty := [p.number for p in chosen if not p.text]:
+            raise HTTPException(422, f"pages {empty} have no text")
+        job_ids = []
+        for page in chosen:
+            params = {
+                "book_id": book_id,
+                "page_id": page.id,
+                "page_number": page.number,
+                "description": f"{book.title}, page {page.number}",
+                "count": 1,
+                "seed": body.seed,
+            }
+            job_ids.append(s.db.create_job(book.project_id, "narration", "tts", params).id)
+            s.db.update_page(page.id, narration_status="queued")
+        s.queue.notify()
+        return JobsCreated(job_ids=job_ids)
+
+    @app.post("/api/books/{book_id}/clips", status_code=202)
+    async def generate_clips(book_id: str, body: GenerateClips, s: S) -> JobsCreated:
+        """One job per page: a clip that starts from the page's approved picture. A new clip joins the page's clips."""
+        book = _book_or_404(s, book_id)
+        s.db.release_idle_media(book_id)
+        pages = s.db.list_pages(book_id)
+        if body.pages is None:
+            chosen = [
+                p
+                for p in pages
+                if p.clip_status in ("draft", "redo")
+                and p.clip_method != "still"
+                and p.motion_prompt
+                and p.status == "approved"
+            ]
+        else:
+            by_number = {p.number: p for p in pages}
+            if missing := [n for n in body.pages if n not in by_number]:
+                raise HTTPException(404, f"book {book_id!r} has no page {missing}")
+            chosen = [by_number[n] for n in dict.fromkeys(body.pages)]
+        if not chosen:
+            raise HTTPException(
+                409, "no page to animate: none has an approved picture, a motion_prompt and a clip to make"
+            )
+        if busy := [p.number for p in chosen if p.clip_status == "queued"]:
+            raise HTTPException(409, f"pages {busy} are already being animated")
+        if unapproved := [p.number for p in chosen if p.status != "approved"]:
+            raise HTTPException(422, f"pages {unapproved} have no approved picture")
+        if empty := [p.number for p in chosen if not p.motion_prompt]:
+            raise HTTPException(422, f"pages {empty} have no motion_prompt")
+        job_ids = []
+        for page in chosen:
+            params = {
+                "book_id": book_id,
+                "page_id": page.id,
+                "page_number": page.number,
+                "description": f"{book.title}, page {page.number}",
+                "count": 1,
+                "seed": body.seed,
+                "model": body.model,
+                "seconds": body.seconds,
+            }
+            job_ids.append(s.db.create_job(book.project_id, "clip", body.model, params).id)
+            s.db.update_page(page.id, clip_status="queued")
+        s.queue.notify()
+        return JobsCreated(job_ids=job_ids)
+
+    @app.post("/api/sheets/{sheet_id}/generate", status_code=202)
+    async def generate_sheet(sheet_id: str, body: GenerateSheet, s: S) -> JobCreated:
+        """A picture of a place or prop sheet. Characters are drawn as sprites (transparent, from POST /api/jobs/image)."""
+        sheet = s.db.get_sheet(sheet_id)
+        if sheet is None:
+            raise HTTPException(404, f"sheet {sheet_id!r} not found")
+        if sheet.kind == "character":
+            raise HTTPException(422, "draw a character as a sprite and link it with its asset_id")
+        book = s.db.get_book(sheet.book_id)
+        params = {
+            "book_id": book.id,
+            "sheet_id": sheet.id,
+            "description": f"{book.title}, {sheet.kind} {sheet.name}",
+            "count": 1,
+            "seed": body.seed,
+        }
+        job = s.db.create_job(book.project_id, "page_image", "qwen_turbo", params)
+        s.queue.notify()
+        return JobCreated(job_id=job.id)
+
+    @app.patch("/api/pages/{page_id}")
+    async def update_page(page_id: str, body: PageUpdate, s: S) -> PageOut:
+        """What the gallery does: choose a candidate or take, approve, or ask for a redo with a note for the agent.
+        The picture and the narration are reviewed apart."""
+        page = s.db.get_page(page_id)
+        if page is None:
+            raise HTTPException(404, f"page {page_id!r} not found")
+        fields = body.model_dump(exclude_unset=True)
+        candidates = s.db.assets_with_meta("page_id", page_id)
+        chosen = fields.get("image_asset_id", page.image_asset_id)
+        if chosen is not None and chosen not in {a.id for a in candidates}:
+            raise HTTPException(422, f"asset {chosen!r} is not a candidate of page {page.number}")
+        if fields.get("status") == "approved":
+            if chosen is None:
+                raise HTTPException(422, f"page {page.number} has no picture to approve")
+            fields.setdefault("note", None)
+        take = fields.get("narration_asset_id", page.narration_asset_id)
+        takes = {a.id for a in s.db.assets_with_meta("narration_page_id", page_id)}
+        if take is not None and take not in takes:
+            raise HTTPException(422, f"asset {take!r} is not a take of page {page.number}")
+        if fields.get("narration_status") == "approved":
+            if take is None:
+                raise HTTPException(422, f"page {page.number} has no narration to approve")
+            fields.setdefault("narration_note", None)
+        # A clip starts from the picture and follows the motion: a change to either makes the chosen clip out of date.
+        moved = any(key in fields and fields[key] != getattr(page, key) for key in CLIP_SOURCE_FIELDS)
+        if moved and fields.get("image_asset_id", page.image_asset_id) is not None:
+            fields |= {"clip_status": "draft", "clip_asset_id": None}
+        clip = fields.get("clip_asset_id", page.clip_asset_id)
+        clips = {a.id for a in s.db.assets_with_meta("clip_page_id", page_id)}
+        if clip is not None and clip not in clips:
+            raise HTTPException(422, f"asset {clip!r} is not a clip of page {page.number}")
+        if fields.get("clip_status") == "approved":
+            method = fields.get("clip_method", page.clip_method)
+            if method == "still" and fields.get("image_asset_id", page.image_asset_id) is None:
+                raise HTTPException(422, f"page {page.number} has no picture to show")
+            if method != "still" and clip is None:
+                raise HTTPException(422, f"page {page.number} has no clip to approve; choose one or use the picture")
+            fields.setdefault("clip_note", None)
+        return _page_out(s, s.db.update_page(page_id, **fields), candidates)
+
+    @app.post("/api/books/{book_id}/check-sources")
+    async def check_sources(book_id: str, body: CheckSources, s: S) -> list[StalePage]:
+        """Pages resting on a passage whose content_version differs from `versions`. The caller reads the versions from
+        the work's own system; Studio never connects to it."""
+        _book_or_404(s, book_id)
+        stale = []
+        for page in s.db.list_pages(book_id):
+            for ref in page.source_refs:
+                current = body.versions.get(ref["node_id"])
+                if current != ref["content_version"]:
+                    stale.append(
+                        StalePage(
+                            number=page.number,
+                            node_id=ref["node_id"],
+                            label=ref.get("label", ""),
+                            was=ref["content_version"],
+                            now=current,
+                        )
+                    )
+        return stale
+
+    @app.post("/api/books/{book_id}/export", status_code=202)
+    async def export_book(book_id: str, body: BookExportRequest, s: S) -> JobCreated:
+        """Lay the book out as a PDF, or join its narration as an MP3. Unless `allow_draft`, every page's picture, or
+        narration, must be approved."""
+        book = _book_or_404(s, book_id)
+        pages = s.db.list_pages(book_id)
+        if not pages:
+            raise HTTPException(409, f"book {book_id!r} has no pages")
+        audio = body.format == "mp3"
+        video = body.format == "mp4"
+        states = {
+            "pdf": [("pages", p.number, p.status) for p in pages],
+            "mp3": [("narration of pages", p.number, p.narration_status) for p in pages],
+            "mp4": [
+                *(("narration of pages", p.number, p.narration_status) for p in pages),
+                *(("the way to show pages", p.number, p.clip_status) for p in pages),
+            ],
+        }[body.format]
+        waiting: dict[str, list[int]] = {}
+        for what, number, state in states:
+            if state != "approved":
+                waiting.setdefault(what, []).append(number)
+        if not body.allow_draft and waiting:
+            detail = "; ".join(f"{what} {numbers}" for what, numbers in waiting.items())
+            raise HTTPException(409, f"{detail} are not approved; approve them or pass allow_draft")
+        if video and not any(p.narration_asset_id and p.image_asset_id for p in pages):
+            raise HTTPException(409, f"book {book_id!r} has no page with both a chosen picture and narration")
+        if not video and not any(p.narration_asset_id if audio else p.image_asset_id for p in pages):
+            raise HTTPException(409, f"book {book_id!r} has no chosen {'narration' if audio else 'pictures'}")
+        params = {"book_id": book_id, "format": body.format, "description": f"{book.title} ({body.format})", "count": 1}
+        job = s.db.create_job(book.project_id, "book_export", "none", params)
+        s.queue.notify()
+        return JobCreated(job_id=job.id)
+
+    # --- feature packs --------------------------------------------------------------------------
+
+    @app.get("/api/packs")
+    async def list_packs(s: S) -> list[PackOut]:
+        return [_pack_out(s, pack) for pack in s.packs.catalog.values()]
+
+    @app.get("/api/packs/{pack_id}")
+    async def get_pack(pack_id: str, s: S) -> PackOut:
+        return _pack_out(s, _pack_or_404(s, pack_id))
+
+    @app.post("/api/packs/{pack_id}/accept", dependencies=[_client_is(*GALLERY_CLIENT)])
+    async def accept_pack(pack_id: str, body: PackAccept, s: S) -> PackOut:
+        """A person agreed to these licenses. Only the gallery may say so."""
+        pack = _pack_or_404(s, pack_id)
+        try:
+            accept(s.db, pack, body.licenses)
+        except KeyError as e:
+            raise HTTPException(422, e.args[0]) from e
+        return _pack_out(s, pack)
+
+    @app.post("/api/packs/{pack_id}/install", status_code=202, dependencies=[_client_is(*PACK_CLIENTS)])
+    async def install_pack(pack_id: str, s: S) -> PackOut:
+        """Start installing and return at once; GET the pack for its progress. Needs every license agreed to."""
+        pack = _pack_or_404(s, pack_id)
+        try:
+            s.packs.install(pack_id)
+        except ConsentRequired as e:
+            detail = {"code": "consent_required", "message": str(e), "gallery_url": _pack_url(s, pack_id)}
+            raise HTTPException(409, detail) from e
+        except InsufficientDisk as e:
+            raise HTTPException(507, str(e)) from e
+        except PackError as e:
+            raise HTTPException(409, str(e)) from e
+        return _pack_out(s, pack)
+
+    @app.post("/api/packs/{pack_id}/cancel", dependencies=[_client_is(*PACK_CLIENTS)])
+    async def cancel_pack(pack_id: str, s: S) -> PackOut:
+        pack = _pack_or_404(s, pack_id)
+        await s.packs.cancel(pack_id)
+        return _pack_out(s, pack)
+
+    @app.delete("/api/packs/{pack_id}", dependencies=[_client_is(*PACK_CLIENTS)])
+    async def remove_pack(pack_id: str, s: S) -> PackOut:
+        """Delete what the install recorded. Its consent stays on record: it says what a person once agreed to."""
+        pack = _pack_or_404(s, pack_id)
+        if any(job.family == "tts" for job in s.db.list_jobs(statuses=["queued", "running"])):
+            raise HTTPException(409, "narration jobs are waiting or running; cancel them first")
+        await s.sidecar.stop()
+        try:
+            await asyncio.to_thread(s.packs.remove, pack_id)
+        except (PackError, OSError) as e:
+            raise HTTPException(409, str(e)) from e
+        return _pack_out(s, pack)
+
     # --- assets ---------------------------------------------------------------------------------
 
     @app.get("/api/assets")
     async def list_assets(
         s: S,
         project: str | None = None,
-        kind: Literal["sprite", "icon", "bgm", "animation"] | None = None,
+        kind: AssetKind | None = None,
         status: AssetStatus | None = None,
         job_id: str | None = None,
     ) -> list[AssetOut]:

@@ -116,3 +116,26 @@ async def test_ensure_backend_gives_up_with_log_path(tmp_path):
         await api.ensure_backend()
     assert str(log_path) in str(exc.value)
     await api.aclose()
+
+
+async def test_the_mcp_client_can_neither_agree_nor_install(settings, fake_comfy):
+    app = create_app(settings, comfy_transport=fake_comfy.transport)
+    async with app.router.lifespan_context(app):
+        mcp = StudioApi("http://127.0.0.1:8765", transport=httpx.ASGITransport(app=app))
+        assert "speech-ko" in {pack["id"] for pack in await mcp.list_packs()}
+        with pytest.raises(BackendError, match="403"):
+            await mcp.install_pack("speech-ko")
+        with pytest.raises(BackendError, match="403"):
+            await mcp.remove_pack("speech-ko")
+        await mcp.aclose()
+
+
+async def test_the_cli_client_is_told_to_ask_a_person(settings, fake_comfy):
+    app = create_app(settings, comfy_transport=fake_comfy.transport)
+    async with app.router.lifespan_context(app):
+        cli = StudioApi("http://127.0.0.1:8765", transport=httpx.ASGITransport(app=app), client="cli")
+        with pytest.raises(BackendError) as e:
+            await cli.install_pack("speech-ko")
+        assert e.value.detail["code"] == "consent_required"
+        assert e.value.detail["gallery_url"].endswith("/#/packs/speech-ko")
+        await cli.aclose()

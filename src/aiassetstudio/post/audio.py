@@ -1,4 +1,5 @@
-"""Post-processing for generated music: trailing silence, quiet intro, a bar-aligned loop, peak level, WAV and OGG.
+"""Post-processing for generated audio. Music: trailing silence, quiet intro, a bar-aligned loop, peak level, WAV and
+OGG. Narration: pages joined with silence between them, one loudness, MP3.
 
 ACE-Step songs end early: all four 90 s test songs (2026-09-24) ended with 3-6 s or more of silence. A battle theme
 with only "[Instrumental]" as lyrics started with about 4 s at around -24 dB; with section tags it did not.
@@ -6,6 +7,7 @@ with only "[Instrumental]" as lyrics started with about 4 s at around -24 dB; wi
 
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,10 +28,13 @@ TEMPO_MAX_ERROR_S = 0.020  # beats this close (rms) to a straight line mean the 
 MIN_TEMPO_BEATS = 16
 PEAK_DBFS = -1.0
 OGG_QUALITY = 6
+MP3_LOUDNESS = "loudnorm=I=-18:TP=-2:LRA=11"
+MP3_BITRATE = "128k"
+MP3_RATE = 44100
 
 
 class AudioEncodeError(RuntimeError):
-    """ffmpeg could not make the OGG; the message carries its error output."""
+    """ffmpeg could not make the file; the message carries its error output."""
 
 
 @dataclass
@@ -169,12 +174,47 @@ def write_wav(path: str | Path, y: np.ndarray, sr: int) -> None:
 
 def encode_ogg(wav_path: str | Path, ogg_path: str | Path, ffmpeg: str = "ffmpeg", quality: int = OGG_QUALITY) -> None:
     """Vorbis OGG from a WAV. Some engines leave a tiny gap when an OGG loops; the WAV loops seamlessly."""
-    command = [ffmpeg, "-y", "-loglevel", "error", "-i", str(wav_path), "-c:a", "libvorbis", "-q:a", str(quality)]
+    run_ffmpeg(ffmpeg, ["-i", str(wav_path), "-c:a", "libvorbis", "-q:a", str(quality), str(ogg_path)])
+
+
+def concat_with_gaps(paths: Sequence[Path], out_path: Path, gap_s: float) -> list[tuple[float, float]]:
+    """The WAVs one after another with `gap_s` of silence between them, in one mono WAV. Returns each one's start and
+    length in seconds. The takes come from one model, so they share a sample rate; a mismatch would shift every start
+    after it, so it raises."""
+    chunks, spans, position, rate = [], [], 0, None
+    for path in paths:
+        y, sr = load_audio(path)
+        if rate not in (None, sr):
+            raise ValueError(f"{path} is {sr} Hz, the takes before it {rate} Hz")
+        rate = sr
+        gap = np.zeros(round(gap_s * sr), dtype=np.float32) if chunks else np.zeros(0, dtype=np.float32)
+        position += len(gap)
+        chunks += [gap, _mono(y)]
+        spans.append((round(position / sr, 3), round(len(y) / sr, 3)))
+        position += len(y)
+    write_wav(out_path, np.concatenate(chunks), rate)
+    return spans
+
+
+def encode_mp3(wav_path: str | Path, mp3_path: str | Path, ffmpeg: str = "ffmpeg") -> None:
+    options = ["-af", MP3_LOUDNESS, "-ar", str(MP3_RATE), "-c:a", "libmp3lame", "-b:a", MP3_BITRATE]
+    run_ffmpeg(ffmpeg, ["-i", str(wav_path), *options, str(mp3_path)])
+
+
+def run_ffmpeg(ffmpeg: str, args: list[str], cwd: Path | None = None) -> None:
+    command = [ffmpeg, "-y", "-loglevel", "error", *args]
     # No console window: the backend runs detached, and a console program started from it would open one.
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
         done = subprocess.run(
-            [*command, str(ogg_path)], capture_output=True, text=True, creationflags=flags, check=False
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=cwd,
+            creationflags=flags,
+            check=False,
         )
     except FileNotFoundError as e:
         raise AudioEncodeError(f"ffmpeg not found ({ffmpeg}); install it or set AIAS_FFMPEG") from e

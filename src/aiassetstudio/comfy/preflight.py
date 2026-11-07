@@ -12,12 +12,25 @@ from .graphs import (
     ACE_TE_SMALL,
     ACE_UNET,
     ACE_VAE,
+    LTX_AUDIO_VAE,
+    LTX_TE,
+    LTX_UNET,
+    LTX_UPSCALER,
+    LTX_VIDEO_VAE,
+    QWEN_BOOK_UNET,
     QWEN_TE,
-    QWEN_UNET,
     QWEN_VAE,
-    VIGGLE_LORA,
+    WAN_LORA_HIGH,
+    WAN_LORA_LOW,
+    WAN_TE,
+    WAN_UNET_HIGH,
+    WAN_UNET_LOW,
+    WAN_VAE,
     YUE2_CKPT,
 )
+
+# The API graphs were verified on this ComfyUI version; node names can change on update.
+VERIFIED_COMFYUI = "0.37.0"
 
 
 @dataclass(frozen=True)
@@ -35,18 +48,17 @@ class FamilyStatus:
 
 
 REQUIRED: dict[str, Requirement] = {
-    "qwen": Requirement(
+    "qwen_turbo": Requirement(
         nodes=(
             "UNETLoader",
             "CLIPLoader",
             "VAELoader",
             "TextEncodeQwenImage21",
             "EmptyLatentImage",
-            "ViggleTurboLora",
             "BasicGuider",
             "RandomNoise",
             "KSamplerSelect",
-            "ViggleTurboSigmas",
+            "ManualSigmas",
             "SamplerCustomAdvanced",
             "VAEDecode",
             "SaveImage",
@@ -56,10 +68,9 @@ REQUIRED: dict[str, Requirement] = {
             "QwenImage21Cache",
         ),
         models={
-            "diffusion_models": (QWEN_UNET,),
+            "diffusion_models": (QWEN_BOOK_UNET,),
             "text_encoders": (QWEN_TE,),
             "vae": (QWEN_VAE,),
-            "loras": (VIGGLE_LORA,),
         },
     ),
     "ace": Requirement(
@@ -93,6 +104,62 @@ REQUIRED: dict[str, Requirement] = {
             "SaveAudio",
         ),
         models={"checkpoints": (YUE2_CKPT,)},
+    ),
+    "wan": Requirement(
+        nodes=(
+            "UNETLoader",
+            "LoraLoaderModelOnly",
+            "ModelSamplingSD3",
+            "CLIPLoader",
+            "CLIPTextEncode",
+            "VAELoader",
+            "LoadImage",
+            "WanImageToVideo",
+            "KSamplerAdvanced",
+            "VAEDecode",
+            "CreateVideo",
+            "SaveVideo",
+            "PreviewAny",
+        ),
+        models={
+            "diffusion_models": (WAN_UNET_HIGH, WAN_UNET_LOW),
+            "loras": (WAN_LORA_HIGH, WAN_LORA_LOW),
+            "text_encoders": (WAN_TE,),
+            "vae": (WAN_VAE,),
+        },
+    ),
+    "ltx": Requirement(
+        nodes=(
+            "UNETLoader",
+            "CLIPLoader",
+            "CLIPTextEncode",
+            "LTXVConditioning",
+            "VAELoader",
+            "LoadImage",
+            "LTXVPreprocess",
+            "EmptyLTXVLatentVideo",
+            "LTXVImgToVideoInplace",
+            "LTXVEmptyLatentAudio",
+            "LTXVConcatAVLatent",
+            "LTXVDualCFGGuider",
+            "RandomNoise",
+            "KSamplerSelect",
+            "ManualSigmas",
+            "SamplerCustomAdvanced",
+            "LTXVSeparateAVLatent",
+            "LatentUpscaleModelLoader",
+            "LTXVLatentUpsampler",
+            "VAEDecodeTiled",
+            "CreateVideo",
+            "SaveVideo",
+            "PreviewAny",
+        ),
+        models={
+            "diffusion_models": (LTX_UNET,),
+            "text_encoders": (LTX_TE,),
+            "vae": (LTX_VIDEO_VAE, LTX_AUDIO_VAE),
+            "latent_upscale_models": (LTX_UPSCALER,),
+        },
     ),
 }
 

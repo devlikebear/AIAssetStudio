@@ -4,11 +4,17 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-JobKind = Literal["image", "bgm", "animation"]
-Family = Literal["qwen", "ace", "yue2", "codex"]  # codex: cloud, no GPU
+JobKind = Literal["image", "bgm", "animation", "page_image", "narration", "clip", "book_export"]
+# qwen_turbo: the official Turbo checkpoint; qwen: images before it, in old records; tts: the speech pack's sidecar; codex: cloud, no GPU;
+# none: on this PC, no GPU
+Family = Literal["qwen", "qwen_turbo", "ace", "yue2", "wan", "ltx", "tts", "codex", "none"]
 JobStatus = Literal["queued", "running", "done", "failed", "cancelled"]
-AssetKind = Literal["sprite", "icon", "bgm", "animation"]
+AssetKind = Literal["sprite", "icon", "bgm", "animation", "page_image", "narration", "clip", "book_export"]
 AssetStatus = Literal["candidate", "selected", "rejected"]
+PageStatus = Literal["draft", "queued", "candidate", "approved", "redo"]
+SheetKind = Literal["character", "place", "prop"]
+ClipMethod = Literal["full", "head", "still"]  # the whole clip, its first seconds, or the picture alone
+PackInstallStatus = Literal["installing", "installed", "failed", "cancelled"]
 
 TERMINAL_STATUSES: tuple[JobStatus, ...] = ("done", "failed", "cancelled")
 
@@ -59,3 +65,82 @@ class Asset(BaseModel):
     files: dict[str, str]  # file role ("raw", "processed", "preview") -> path relative to data_dir
     meta: dict
     created_at: str
+
+
+class Book(BaseModel):
+    """One work being made into a picture book. `source` says where it came from; Studio never reads that system."""
+
+    id: str
+    project_id: int
+    project: str  # slug
+    title: str
+    source: dict | None = None
+    width: int
+    height: int
+    cover_page: int | None = None  # page number whose picture is the cover; None = the first page
+    created_at: str
+    updated_at: str
+
+
+class Page(BaseModel):
+    id: str
+    book_id: str
+    number: int
+    text: str = ""
+    image_prompt: str = ""
+    people: list[str] = []  # names of character sheets, the most important first
+    props: list[str] = []  # names of prop sheets, or plain descriptions
+    place: str | None = None  # name of a place sheet, or a plain description
+    source_refs: list[dict] = []  # [{"node_id", "content_version", "label"}]: the passages the page rests on
+    image_asset_id: str | None = None  # the chosen picture
+    status: PageStatus = "draft"
+    note: str | None = None  # the person's request for a redo, for the agent to read
+    narration_asset_id: str | None = None  # the chosen take
+    narration_status: PageStatus = "draft"  # reviewed apart from the picture: one can be approved alone
+    narration_note: str | None = None
+    motion_prompt: str = ""  # what moves in the clip, in English
+    motion_still: bool = True  # tell the people to stay where they are
+    clip_asset_id: str | None = None  # the chosen clip
+    clip_status: PageStatus = "draft"
+    clip_note: str | None = None
+    clip_method: ClipMethod = "full"
+    clip_head_s: float = 2.0  # seconds of the clip that the head method uses
+    created_at: str
+    updated_at: str
+
+
+class Sheet(BaseModel):
+    """A character, place or prop the pages keep the same."""
+
+    id: str
+    book_id: str
+    kind: SheetKind
+    name: str
+    description: str = ""
+    asset_id: str | None = None  # its picture, used as a reference
+    created_at: str
+
+
+class Term(BaseModel):
+    term: str
+    spoken: str  # how to write it so the narrator says it right
+
+
+class PackConsent(BaseModel):
+    """A person agreed to this exact license text for this version of a pack."""
+
+    pack_id: str
+    pack_version: str
+    license_id: str
+    license_sha256: str
+    accepted_at: str
+
+
+class PackInstall(BaseModel):
+    pack_id: str
+    version: str
+    status: PackInstallStatus
+    stage: str | None = None
+    error: str | None = None
+    files: list[str] = []  # paths inside the pack's folder that the install made, all that a removal deletes
+    installed_at: str | None = None

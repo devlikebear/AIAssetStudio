@@ -1,4 +1,4 @@
-import type { AnimationTag, Asset, Job, PixelFit } from './api'
+import type { AnimationTag, Asset, Job, PageStatus, PixelFit } from './api'
 
 const relative = new Intl.RelativeTimeFormat('ko', { numeric: 'auto' })
 
@@ -61,6 +61,23 @@ export const KIND_LABEL: Record<string, string> = {
   icon: '아이콘',
   bgm: 'BGM',
   animation: '애니메이션',
+  page_image: '쪽 그림',
+  narration: '낭독',
+  clip: '영상 클립',
+  book_export: '책 내보내기',
+}
+
+export const PAGE_STATUS_LABEL: Record<PageStatus, string> = {
+  draft: '준비',
+  queued: '생성 중',
+  candidate: '검수 대기',
+  approved: '채택',
+  redo: '재작업 요청',
+}
+
+/** A book's jobs are reviewed in the book, page by page, not in the project's job list. */
+export function isBookJob(job: Pick<Job, 'kind'>): boolean {
+  return ['page_image', 'narration', 'clip', 'book_export'].includes(job.kind)
 }
 
 /** What a job makes: an image kind (sprite, icon) from its params, or the job kind (bgm). */
@@ -90,6 +107,16 @@ const STAGE_LABEL: Record<string, string> = {
   'starting ComfyUI': 'ComfyUI 켜는 중',
   'encoding prompt': '프롬프트 인코딩',
   'uploading reference': '참고 이미지 올리는 중',
+  'uploading references': '참고 이미지 올리는 중',
+  generating: '생성 중',
+  'laying out': '조판 중',
+  'starting the speech model': '음성 모델 켜는 중',
+  speaking: '낭독 중',
+  'joining pages': '쪽 잇는 중',
+  encoding: '인코딩 중',
+  'uploading the picture': '그림 올리는 중',
+  postprocess: '마무리 중',
+  'assembling video': '영상 조립 중',
   'freeing memory': '메모리 비우는 중',
   // animations (sprite-gen + codex)
   preparing: 'sprite-gen 준비 중',
